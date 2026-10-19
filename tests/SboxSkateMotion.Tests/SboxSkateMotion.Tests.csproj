@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\dev\SkateMotion.Core.csproj" />
+    <None Update="Data\contact-solver.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Data\contact-compiler.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Data\body-update.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Data\constraint-pairs.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Data\joint-compiler.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Data\joint-twist.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Data\drive-compiler.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Data\contact-inputs.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

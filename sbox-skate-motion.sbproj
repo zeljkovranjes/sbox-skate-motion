@@ -1,0 +1,26 @@
+{
+  "Title": "Skate Motion",
+  "Type": "library",
+  "Org": "notpointless",
+  "Ident": "chomnr_sbox_skate_motion",
+  "Schema": 1,
+  "IncludeSourceFiles": true,
+  "Resources": null,
+  "PackageReferences": [],
+  "EditorReferences": null,
+  "Mounts": null,
+  "IsStandaloneOnly": false,
+  "Metadata": {
+    "Summary": "Simulates a skateboard with articulated wheels and native scene collision queries.",
+    "Description": "Simulates a skateboard with articulated wheels and native scene collision queries. Add Skateboard to a physics object, then supply controls or attach a SkateRider. Handling values are estimates.",
+    "WebsiteUrl": "https://github.com/zeljkovranjes/sbox-skate-motion",
+    "Tags": [
+      "physics",
+      "skateboarding",
+      "movement"
+    ],
+    "Compiler": {
+      "ReleaseMode": "Release"
+    }
+  }
+}

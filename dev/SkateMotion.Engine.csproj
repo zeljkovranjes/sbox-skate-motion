@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>SkateMotion.EngineCheck</AssemblyName>
+    <EngineManaged>C:/Program Files (x86)/Steam/steamapps/common/sbox/bin/managed</EngineManaged>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Code/**/*.cs" Exclude="../Code/**/obj/**;../Code/**/bin/**" />
+    <Reference Include="$(EngineManaged)/Sandbox.System.dll" />
+    <Reference Include="$(EngineManaged)/Sandbox.Engine.dll" />
+    <Reference Include="$(EngineManaged)/Sandbox.Filesystem.dll" />
+    <Reference Include="$(EngineManaged)/Sandbox.Reflection.dll" />
+    <Reference Include="$(EngineManaged)/Sandbox.Mounting.dll" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,29 @@
+{
+  "RootObject": {
+    "__guid": "5a32d357-4413-48a1-8dc9-308b48f60e7e",
+    "__version": 2,
+    "Name": "Skateboard",
+    "Position": "0,0,0",
+    "Rotation": "0,0,0,1",
+    "Scale": "1,1,1",
+    "Enabled": true,
+    "NetworkMode": 0,
+    "Components": [
+      {
+        "__type": "Sandbox.Rigidbody",
+        "__guid": "09e45477-244a-4234-9b84-79bb50c7352f",
+        "__enabled": true,
+        "MassOverride": 80,
+        "Gravity": false
+      },
+      {
+        "__type": "SkateMotion.Components.Skateboard",
+        "__guid": "48a1b093-6081-4910-8e48-bd35495d9021",
+        "__enabled": true,
+        "GenerateGeometry": true
+      }
+    ],
+    "Children": []
+  },
+  "__version": 2
+}
