@@ -42,6 +42,15 @@ public sealed class SkateRider : Component
 	/// </summary>
 	[Property, Group( "Controls" )] public bool ResponsiveWalking { get; set; }
 
+	/// <summary>Farthest (metres) the board is called back to the hand from.</summary>
+	[Property, Group( "Controls" )] public float RecallRange { get; set; } = Core.Physics.BoardReach.Farthest;
+
+	/// <summary>
+	/// Whether only a board in sight can be called back to the hand; off, it flies back through whatever is in the way,
+	/// as a thrown hammer called home does.
+	/// </summary>
+	[Property, Group( "Controls" )] public bool RecallNeedsSight { get; set; } = true;
+
 	/// <summary>Whether a bailed rider gets up by themselves once they have lain still for a while.</summary>
 	[Property, Group( "Riding" )] public bool RecoverAutomatically { get; set; } = true;
 
@@ -209,6 +218,7 @@ public sealed class SkateRider : Component
 	/// <summary>Reaches for a nearby board before lifting it into the carrying pose.</summary>
 	public bool RequestPickUp()
 	{
+		Configure();
 		if ( !BeginInteraction( RiderAction.PickUp ) ) return false;
 		// A board left upside down is turned back over as the rider reaches for it, so the hand takes it the right way up.
 		Board.TurnUpright();
@@ -350,6 +360,15 @@ public sealed class SkateRider : Component
 		_sprinting = sprint;
 	}
 
+	// The motor follows the rider's walking and recall options as they are now.
+	private void Configure()
+	{
+		if ( _motor is null ) return;
+		_motor.Responsive = ResponsiveWalking;
+		_motor.RecallRange = RecallRange;
+		_motor.RecallNeedsSight = RecallNeedsSight;
+	}
+
 	// How hard the rider is told to walk, as its clips see it. Walking responsively, the stick let go for under MoveGrace
 	// seconds (going from one key to another) keeps the walk's clips going: seen at once, a gap of a few frames started a
 	// stop clip and ran on out of it, the body snapping between them.
@@ -376,6 +395,18 @@ public sealed class SkateRider : Component
 	public bool Dismount()
 	{
 		if ( IsProxy || _motor is null || !_motor.Dismount() ) return false;
+		Board.SetRiderAttached( false );
+		return true;
+	}
+
+	/// <summary>
+	/// Puts a riding rider on its feet at <paramref name="place"/> (a player taking its place there, say), leaving the board
+	/// where it is: unlike <see cref="Dismount"/> it needs no room beside the board.
+	/// </summary>
+	public bool StandAt( Transform place )
+	{
+		if ( IsProxy || _motor is null || !_motor.StandAt( place ) ) return false;
+		_animator.Smoother.Reset();
 		Board.SetRiderAttached( false );
 		return true;
 	}
@@ -800,7 +831,7 @@ public sealed class SkateRider : Component
 	{
 		if ( IsProxy || _motor is null || !Board.IsValid() ) return;
 		_animator.Ragdoll?.Step( Time.Delta );
-		_motor.Responsive = ResponsiveWalking;
+		Configure();
 		AutoRecover();
 		if ( Mode == SkateRiderMode.Riding && !IsInteracting )
 			StepHippyJump( Time.Delta );

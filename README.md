@@ -65,6 +65,8 @@ After startup, call `board.CaptureTelemetry()` for an allocated diagnostic snaps
 | SkateRider.AnimationGraph | empty | Graph JSON path in the data folder that tags and plays the clip set |
 | SkateRider.AnimationStyle | empty | Preferred style tag, e.g. a signature set; empty plays the standard motions |
 | SkateRider.ResponsiveWalking | false | Walking and carrying answer the controls at once, as a game's own player controller does: full speed in about 0.15 s, a stop in about 0.2 s, turns kept at speed, the stick taking over from a landing's clip |
+| SkateRider.RecallRange | 30 m | Farthest the board is called back to the hand from (RequestPickUp); past 30 m it comes at 70 m/s |
+| SkateRider.RecallNeedsSight | true | Only a board in sight can be called back; off, it flies back through whatever is in the way |
 | SkateProfile.BailSpeed | 8 m/s | Normal closing speed that triggers a hard-impact bail |
 | GrindRail.Points | empty (use BoxCollider top) | Local polyline of the grindable edge |
 | GrindRail.RailWidth | 6 in | Boxes narrower than this grind on their center line, wider ones on both top edges |

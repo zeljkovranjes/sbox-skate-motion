@@ -21,6 +21,16 @@ internal static class BoardReach
 	private const float Rise = 0.15f;
 	private const float Highest = 1.5f;
 
+	// A board called from farther than Farthest (a rider with a longer recall range) comes at least this fast (m/s).
+	private const float RecallSpeed = 70f;
+
+	/// <summary>
+	/// Seconds a board <paramref name="distance"/> metres away takes to reach the hand when called back: as
+	/// <see cref="FlightSeconds"/> within <see cref="Farthest"/>, and from farther at <see cref="RecallSpeed"/>.
+	/// </summary>
+	internal static float RecallSeconds( float distance ) =>
+		float.IsFinite( distance ) ? MathF.Max( FlightSeconds( distance ), distance / RecallSpeed ) : FlightSeconds( distance );
+
 	/// <summary>Seconds a board <paramref name="distance"/> metres away takes to reach the hand.</summary>
 	internal static float FlightSeconds( float distance )
 	{

@@ -45,8 +45,16 @@ internal sealed class RiderMotor
 
 	// Whether the walking rider has been in the air since it last stood on the ground.
 	private bool _flying;
-	// A board in sight can be called back to the hand from as far as BoardReach allows, rolling or not.
-	internal bool CanPickUp => Mode == SkateRiderMode.Walking && Reachable( Core.Physics.BoardReach.Farthest * SkateUnits.InchesPerMetre );
+	// A board can be called back to the hand from as far as RecallRange (metres), in sight unless RecallNeedsSight is off,
+	// rolling or not.
+	internal bool CanPickUp => Mode == SkateRiderMode.Walking
+		&& Reachable( RecallRange * SkateUnits.InchesPerMetre, RecallNeedsSight );
+
+	/// <summary>Farthest (metres) a board is called back to the hand from.</summary>
+	internal float RecallRange { get; set; } = Core.Physics.BoardReach.Farthest;
+
+	/// <summary>Whether only a board in sight can be called back; off, it comes through whatever is in the way.</summary>
+	internal bool RecallNeedsSight { get; set; } = true;
 	// A board lying flat either way up can be got on: upside down, it is turned back over as the rider steps on.
 	internal bool CanMount => Mode == SkateRiderMode.Walking && Reachable( MountReach )
 		&& MathF.Abs( Vector3.Dot( _board.WorldRotation.Up, Vector3.Up ) ) >= 0.6f;
@@ -410,6 +418,24 @@ internal sealed class RiderMotor
 			return true;
 		}
 		return false;
+	}
+
+	/// <summary>
+	/// Takes a riding rider off its board onto its feet at <paramref name="place"/>, wherever the board is: a game putting
+	/// it where a player stands needs no room beside the board.
+	/// </summary>
+	internal bool StandAt( Transform place )
+	{
+		if ( Mode != SkateRiderMode.Riding )
+			return false;
+		_walker.Radius = WalkRadius;
+		_rider.WorldTransform = place;
+		_rider.Transform.ClearInterpolation();
+		_walker.Velocity = Vector3.Zero;
+		_walker.IsOnGround = false;
+		_walker.Enabled = true;
+		Mode = SkateRiderMode.Walking;
+		return true;
 	}
 
 	/// <summary>
@@ -790,10 +816,12 @@ internal sealed class RiderMotor
 		_rider.WorldRotation = rotation;
 	}
 
-	private bool Reachable( float range )
+	private bool Reachable( float range, bool sight = true )
 	{
 		if ( !_board.IsValid() || (_board.WorldPosition - _rider.WorldPosition).Length > range )
 			return false;
+		if ( !sight )
+			return true;
 		var trace = _rider.Scene.Trace.Ray( _rider.WorldPosition + Vector3.Up * 32f, _board.WorldPosition )
 			.IgnoreGameObjectHierarchy( _rider ).IgnoreGameObjectHierarchy( _board ).Run();
 		return !trace.Hit && !trace.StartedSolid;

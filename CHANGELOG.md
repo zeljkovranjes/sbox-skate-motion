@@ -1,6 +1,18 @@
 # Changelog
 
 ## 2026-10-21
+Title: Calling the Board Home
+### Added
+# Controls
+Recall range and sight - SkateRider.RecallRange (metres, 30 by default) sets how far the board is called back to the hand from, and SkateRider.RecallNeedsSight (on by default) whether it must be in sight; off, it flies back through whatever is in the way. From farther than 30 m it comes at 70 m/s (BoardReach.RecallSeconds; within 30 m it flies as before)
+Stand at - SkateRider.StandAt( place ) puts a riding rider on its feet at a place of the game's choosing (a player taking its place there), leaving the board where it is; unlike Dismount it needs no room beside the board
+### Changed
+# Board
+A board more than 200 in from the hand is called as the reach begins (0.34 s into the pickup) instead of when the reach clip's hand is out: it takes its flight's time to come and arrives as the arm comes out. A call from 20 m now takes about 1.3 s from the pickup's start (was about 1.7)
+# Camera
+On foot the camera starts behind the rider's own facing, not the board's: a board called from afar lies any way, and the camera could start in front of the rider
+
+## 2026-10-21
 Title: A Real Grip, Responsive Walking and Riders That Walk for Everyone
 ### Added
 # Controls

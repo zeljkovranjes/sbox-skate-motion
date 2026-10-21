@@ -85,8 +85,11 @@ internal sealed class SkateCameraRig
 		var velocity = mode == CameraSubjectMode.Bailed ? Vector3.Zero : target.Velocity;
 		var airborne = mode == CameraSubjectMode.OnFoot ? target.RiderAirborne : target.State.IsAirborne;
 		var focus = focusHeight > 0f ? focusHeight : target.RiderHeight > 0f ? target.RiderHeight * FocusShare : LoneFocus;
+		// On foot the rider faces its own way: the board may lie anywhere, turned any way (called from afar, the camera
+		// started from its heading and could stand in front of the rider).
+		var facing = mode == CameraSubjectMode.OnFoot ? target.Rider.Rotation.Yaw() : target.Board.Rotation.Yaw();
 		return new CameraSubject( mode, SkateUnits.Metres( target.Board.Position ), SkateUnits.Metres( target.Rider.Position ),
-			SkateUnits.Metres( velocity ), target.Board.Rotation.Yaw() * CameraMath.Degrees, airborne,
+			SkateUnits.Metres( velocity ), facing * CameraMath.Degrees, airborne,
 			target.State.Grind != SkateGrind.None, target.State.Balance != SkateBalanceMode.None,
 			focus / SkateUnits.InchesPerMetre );
 	}

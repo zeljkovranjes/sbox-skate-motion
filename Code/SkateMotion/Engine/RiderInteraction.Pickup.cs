@@ -24,6 +24,10 @@ internal sealed partial class RiderInteraction
 	private const float CallAtLatest = 0.34f;
 	private const float ReachCallAtLatest = 1.5f;
 
+	// A board farther than this (inches) is called as the reach begins, CallAtLatest into the pickup, not when the reach
+	// animation's hand is out: it takes its flight's time to come, and the hand is out by the time it arrives.
+	private const float FarCall = 200f;
+
 	/// <param name="requested">Whether the reach animation calls the board now.</param>
 	/// <param name="reaching">Whether a reach animation is playing.</param>
 	internal void ObserveRetrievalRequest( bool requested, bool reaching = false )
@@ -66,11 +70,12 @@ internal sealed partial class RiderInteraction
 	{
 		if ( !_captured )
 		{
-			if ( !_pickupRequested && _elapsed < (_reaching ? ReachCallAtLatest : CallAtLatest) )
+			var far = (_board.WorldPosition - _motor.CarryPose.Position).Length > FarCall;
+			if ( !_pickupRequested && _elapsed < (_reaching && !far ? ReachCallAtLatest : CallAtLatest) )
 				return;
 			_startBoard = _board.WorldTransform;
 			_flightTime = 0f;
-			_flightLength = BoardReach.FlightSeconds( SkateUnits.Metres( _motor.CarryPose.Position - _startBoard.Position ).Length() );
+			_flightLength = BoardReach.RecallSeconds( SkateUnits.Metres( _motor.CarryPose.Position - _startBoard.Position ).Length() );
 			_captured = true;
 			CaptureBoard = true;
 			return;
