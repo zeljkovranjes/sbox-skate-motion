@@ -920,6 +920,7 @@ internal sealed class ClipRiderAnimation
 			LiftOnFoot( i, input.Airborne, delta );
 			HoldPlanted( i, model, mirror, !input.Airborne, State, delta );
 		}
+		TakeLegs( input, model, delta );
 		// The first frames after starting can carry a pose or board that is not real yet; the corrections wait for one.
 		if ( riding && Finite( model ) && Finite( boardShown ) && Finite( _positions[ 0 ] ) )
 		{
@@ -1105,15 +1106,26 @@ internal sealed class ClipRiderAnimation
 		var grip = new Transform( model.PointToWorld( SkateUnits.ToEngine( _positions[ hand ] ) ),
 			model.Rotation * SkateUnits.ToEngine( _rotations[ hand ] ) );
 		var placed = grip.ToLocal( held );
+		// A clip whose own board is not in its hand (a pickup's, the board still down by the feet as the called board
+		// arrives) says nothing of the grip: the board is held where it came into the hand until a clip has it there, and
+		// the grip settles only on placements in the hand. Settled on the pickup clip's, a called board was carried 72 in
+		// from the hand for as long as it was carried.
+		var inHand = Finite( placed ) && placed.Position.Length <= GripReach;
 		if ( !carried || !_heldSteady || hand != _heldHand || !Finite( placed ) )
 		{
 			_heldInHand = placed;
+			if ( carried && !inHand && Finite( placed ) )
+			{
+				var caught = grip.ToLocal( _board.WorldTransform );
+				_heldInHand = Finite( caught ) && caught.Position.Length <= GripReach ? caught
+					: placed.WithPosition( placed.Position.Normal * GripReach );
+			}
 			_heldSteady = carried && Finite( placed );
 			_heldHand = hand;
 			_heldFor = 0f;
-			return held;
+			return carried ? grip.ToWorld( _heldInHand ) : held;
 		}
-		if ( _heldFor < GripSettle )
+		if ( _heldFor < GripSettle && inHand )
 		{
 			_heldFor += delta;
 			var follow = 1f - MathF.Exp( -HeldFollow * delta );
@@ -1122,6 +1134,9 @@ internal sealed class ClipRiderAnimation
 		}
 		return grip.ToWorld( _heldInHand );
 	}
+
+	// Farthest (inches) a held board's middle is from the wrist: a placement further off has the board out of the hand.
+	private const float GripReach = 14f;
 
 	// The clip's skater curls its fingers round the rail. With finger poses a rider with finger bones curls its own the
 	// same way, its hand lying as the clip's does, thumb over the deck and fingers under it; the deck eases along its
@@ -1436,11 +1451,149 @@ internal sealed class ClipRiderAnimation
 		{
 			if ( each.Index != bone )
 				continue;
-			var found = (SkateUnits.ToCore( each.LocalTransform.Rotation ), each.Parent?.Index ?? -1);
+			// Bones' rest transforms are relative to the root bone: the turn against the parent is the parent's undone.
+			var parent = each.Parent;
+			var turn = SkateUnits.ToCore( each.LocalTransform.Rotation );
+			if ( parent is not null )
+				turn = System.Numerics.Quaternion.Normalize( System.Numerics.Quaternion.Conjugate(
+					SkateUnits.ToCore( parent.LocalTransform.Rotation ) ) * turn );
+			var found = (turn, parent?.Index ?? -1);
 			_restTurns[ bone ] = found;
 			return found;
 		}
 		return null;
+	}
+
+	/// <summary>
+	/// A body playing the model's own walk (the same model, never drawn) whose hips and legs the rider takes while it walks
+	/// or carries the board on its feet, the body above the hips (spine, arms, hands, head) staying the clips' and carried
+	/// with the hips; null keeps the clips' own legs.
+	/// </summary>
+	internal SkinnedModelRenderer LegSource { get; set; }
+
+	/// <summary>Whether the rider's legs are the leg source's at all this frame (coming in or going out included).</summary>
+	internal bool LegsShown => _legsShare > 0f;
+
+	// How far over to the leg source's hips and legs the rider is (0 to 1), easing over LegsEase as it walks off the board
+	// or onto it, picks it up or puts it down: the clips' own legs then (a pickup's crouch, a throw's step).
+	private float _legsShare;
+	private const float LegsEase = 0.25f;
+	private int _hips = -1;
+	private int[] _legBones;
+	private int[] _bodyBones;
+	private int[] _rigParents;
+	private Transform[] _legPose;
+	private bool _legsTaken;
+
+	// The leg source's pose against each bone's parent (metres), followed for continuity before the legs take it: the
+	// stock walk itself jumps, a foot going from mid-stride to the standing pose in a frame (14 in) as the walk stops, or
+	// 9 in in a frame as a run's stride changes.
+	private SkeletonPose _legLocal;
+	private readonly PoseInertializer _legContinuity = new();
+
+	/// <summary>
+	/// Reads the leg source's whole skeleton on its model, from each bone's place against its parent, once a frame after
+	/// every update (see Systems.RiderLegReader), when every skeleton is posed. Each bone carries on from what was shown
+	/// (see PoseInertializer) before the legs take it.
+	/// </summary>
+	internal void ReadLegs()
+	{
+		_legsTaken = false;
+		if ( LegSource?.SceneModel is not { } scene || !LegSource.GameObject.Enabled || !LegBones() )
+		{
+			_legContinuity.Reset();
+			return;
+		}
+		if ( _legLocal is null || _legLocal.Positions.Length != _rigParents.Length )
+			_legLocal = new SkeletonPose( _rigParents.Length );
+		for ( var bone = 0; bone < _rigParents.Length; bone++ )
+		{
+			var local = scene.GetBoneLocalTransform( bone );
+			_legLocal.Positions[ bone ] = SkateUnits.Metres( local.Position );
+			_legLocal.Rotations[ bone ] = SkateUnits.ToCore( local.Rotation );
+		}
+		_legContinuity.Apply( _legLocal, Time.Delta );
+		for ( var bone = 0; bone < _rigParents.Length; bone++ )
+		{
+			var local = new Transform( SkateUnits.Inches( _legLocal.Positions[ bone ] ), SkateUnits.ToEngine( _legLocal.Rotations[ bone ] ) );
+			var parent = _rigParents[ bone ];
+			_legPose[ bone ] = parent >= 0 && parent < bone ? _legPose[ parent ].ToWorld( local ) : local;
+		}
+		_legsTaken = true;
+	}
+
+	private void TakeLegs( in RiderAnimationInput input, Transform model, float delta )
+	{
+		var wanted = LegSource is not null && input.Activity is RiderActivity.Walking or RiderActivity.Carrying ? 1f : 0f;
+		_legsShare = Approach( _legsShare, wanted, delta / LegsEase );
+		// Taken only once ReadLegs has read the source whole (its bones found, see LegBones).
+		if ( _legsShare <= 0f || !_legsTaken )
+			return;
+		var weight = Smoothstep( _legsShare );
+		var drawn = _renderer.WorldTransform;
+		// A bone of the source in this frame's model frame: its place on the source's model (as last read whole, see
+		// ReadLegs), put where the rider is drawn.
+		bool Source( int bone, out System.Numerics.Vector3 position, out System.Numerics.Quaternion rotation )
+		{
+			var world = drawn.ToWorld( _legPose[ bone ] );
+			position = SkateUnits.ToCore( model.PointToLocal( world.Position ) );
+			rotation = SkateUnits.ToCore( model.Rotation.Inverse * world.Rotation );
+			return Finite( position ) && float.IsFinite( rotation.X + rotation.Y + rotation.Z + rotation.W );
+		}
+		if ( !Source( _hips, out var hipsAt, out var hipsTurn ) )
+			return;
+		// The hips go over to the source's, carrying the body above them; the legs take the source's own.
+		var hipsWas = _positions[ _hips ];
+		var turnWas = _rotations[ _hips ];
+		var hipsNow = System.Numerics.Vector3.Lerp( hipsWas, hipsAt, weight );
+		var turnNow = System.Numerics.Quaternion.Normalize( System.Numerics.Quaternion.Slerp( turnWas, hipsTurn, weight ) );
+		var carry = System.Numerics.Quaternion.Normalize( turnNow * System.Numerics.Quaternion.Conjugate( turnWas ) );
+		foreach ( var bone in _bodyBones )
+		{
+			_positions[ bone ] = hipsNow + System.Numerics.Vector3.Transform( _positions[ bone ] - hipsWas, carry );
+			_rotations[ bone ] = System.Numerics.Quaternion.Normalize( carry * _rotations[ bone ] );
+		}
+		_positions[ _hips ] = hipsNow;
+		_rotations[ _hips ] = turnNow;
+		foreach ( var bone in _legBones )
+		{
+			if ( !Source( bone, out var at, out var turn ) )
+				continue;
+			_positions[ bone ] = System.Numerics.Vector3.Lerp( _positions[ bone ], at, weight );
+			_rotations[ bone ] = System.Numerics.Quaternion.Normalize( System.Numerics.Quaternion.Slerp( _rotations[ bone ], turn, weight ) );
+		}
+	}
+
+	// The hips, the legs (each thigh and every bone below it) and the body above the hips (every other bone below them).
+	private bool LegBones()
+	{
+		if ( _legBones is not null )
+			return _hips >= 0;
+		_legBones = System.Array.Empty<int>();
+		_bodyBones = System.Array.Empty<int>();
+		_hips = Rig[ "hips" ];
+		var thighs = new[] { Rig[ "left_upleg" ], Rig[ "right_upleg" ] };
+		if ( _hips < 0 || thighs[ 0 ] < 0 || thighs[ 1 ] < 0 || _renderer.Model is not { } rig )
+		{
+			_hips = -1;
+			return false;
+		}
+		var parents = rig.Bones.AllBones.OrderBy( bone => bone.Index ).Select( bone => bone.Parent?.Index ?? -1 ).ToArray();
+		_rigParents = parents;
+		_legPose = new Transform[ parents.Length ];
+		bool Under( int bone, int above )
+		{
+			for ( var at = bone; at >= 0; at = parents[ at ] )
+			{
+				if ( at == above )
+					return true;
+			}
+			return false;
+		}
+		_legBones = Enumerable.Range( 0, parents.Length ).Where( bone => Under( bone, thighs[ 0 ] ) || Under( bone, thighs[ 1 ] ) ).ToArray();
+		_bodyBones = Enumerable.Range( 0, parents.Length )
+			.Where( bone => bone != _hips && Under( bone, _hips ) && !_legBones.Contains( bone ) ).ToArray();
+		return true;
 	}
 
 	// The catch's give: the arrival velocity carried on and eased back, t * exp( -t / CatchTime ), its furthest reach

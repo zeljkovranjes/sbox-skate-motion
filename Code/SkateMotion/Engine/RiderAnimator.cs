@@ -224,6 +224,12 @@ internal sealed class RiderAnimator
 			RiderOutfit.ApplyDefault( _renderer );
 		_animation = _visual.Components.Create<CitizenAnimationHelper>();
 		_animation.Target = _renderer;
+		// The stock walk, never drawn, whose hips and legs the rider takes on foot (see ClipRiderAnimation.LegSource).
+		_legsObject = new GameObject( rider, false, "Rider Legs" ) { NetworkMode = NetworkMode.Never };
+		_legsRenderer = _legsObject.Components.Create<SkinnedModelRenderer>();
+		_legsRenderer.Model = _renderer.Model;
+		_legs = _legsObject.Components.Create<CitizenAnimationHelper>();
+		_legs.Target = _legsRenderer;
 		_ownsFront = !front.IsValid();
 		_ownsRear = !rear.IsValid();
 		_front = front.IsValid() ? front : Target( board, "Front Foot", new( 8f, 0f, 1f ) );
@@ -249,6 +255,9 @@ internal sealed class RiderAnimator
 		try
 		{
 			_clips = new ClipRiderAnimation( _renderer, assets, _rider, _board );
+			// A model with its own walk (the citizen's) walks with it on foot; one without keeps the clips' legs.
+			if ( _renderer.Model?.AnimGraph is not null )
+				_clips.LegSource = _legsRenderer;
 		}
 		catch ( InvalidOperationException error )
 		{
@@ -258,6 +267,9 @@ internal sealed class RiderAnimator
 	}
 
 	internal void Request( IReadOnlyDictionary<string, string> tags, float seconds ) => _clips?.Request( tags, seconds );
+
+	/// <summary>Reads the stock walk's skeleton for the next frame's legs (see ClipRiderAnimation.ReadLegs).</summary>
+	internal void ReadLegs() => _clips?.ReadLegs();
 
 	/// <summary>Blends the clips' first poses from a body pose (see <see cref="Components.SkateRider.BlendFrom"/>).</summary>
 	internal void BlendFrom( Transform[] modelPose, float seconds ) => _clips?.BlendFrom( modelPose, seconds );
@@ -453,8 +465,36 @@ internal sealed class RiderAnimator
 			MountHeld = mountHeld,
 			DroppingIn = droppingIn
 		};
+		FeedLegs( activity, velocity );
 		_clips.Update( snapshot, delta, Root( activity, board, delta ) );
 		return true;
+	}
+
+	// The stock walk the rider's hips and legs follow on foot: the same model, never drawn, playing the model's own walk
+	// from the rider's movement where the rider is drawn, so its stride, starts, stops, turns and jumps are the stock ones.
+	private readonly GameObject _legsObject;
+	private readonly SkinnedModelRenderer _legsRenderer;
+	private readonly CitizenAnimationHelper _legs;
+	private bool _legsGrounded = true;
+
+	private void FeedLegs( RiderActivity activity, Vector3 velocity )
+	{
+		if ( _clips?.LegSource is null )
+			return;
+		var onFoot = activity is RiderActivity.Walking or RiderActivity.Carrying;
+		_legsObject.Enabled = onFoot || _clips.LegsShown;
+		if ( !_legsObject.Enabled )
+			return;
+		_legsObject.WorldTransform = _renderer.WorldTransform;
+		if ( _legsRenderer.SceneModel is { } scene )
+			scene.RenderingEnabled = false;
+		var moving = onFoot ? velocity : Vector3.Zero;
+		_legs.WithVelocity( moving );
+		_legs.WithWishVelocity( moving.WithZ( 0f ) );
+		_legs.IsGrounded = !onFoot || _onGround;
+		if ( onFoot && _legsGrounded && !_onGround && velocity.z > 0f )
+			_legs.TriggerJump();
+		_legsGrounded = !onFoot || _onGround;
 	}
 
 	/// <summary>Tells the clips whether the walking rider stands on the ground and how fast it was falling.</summary>

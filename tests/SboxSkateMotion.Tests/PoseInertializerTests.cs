@@ -134,6 +134,51 @@ public class PoseInertializerTests( ITestOutputHelper output )
 		Assert.True( Angle( pose.Rotations[ 0 ], turned ) < 1e-4f );
 	}
 
+	[Fact]
+	public void TurnsAboutDifferentAxesComposeWithoutAJump()
+	{
+		var smoother = new PoseInertializer();
+		var pose = new SkeletonPose( 1 );
+		var shown = new Quaternion[ 120 ];
+		var worst = 0f;
+		for ( var frame = 0; frame < shown.Length; frame++ )
+		{
+			// Held, turned 70 degrees about one axis in a frame, and while that is still easing over, 100 degrees about
+			// another in a frame (a grab's arm as the other hand's grab joins it).
+			var given = Quaternion.Identity;
+			if ( frame >= 20 )
+				given = Quaternion.CreateFromAxisAngle( Vector3.UnitZ, 1.2f );
+			if ( frame >= 24 )
+				given = Quaternion.Normalize( Quaternion.CreateFromAxisAngle( Vector3.UnitX, 1.75f ) * given );
+			Given( pose, 0, Vector3.Zero, given );
+			smoother.Apply( pose, Step );
+			shown[ frame ] = pose.Rotations[ 0 ];
+			if ( frame >= 2 )
+			{
+				var speed = Turn( shown[ frame - 1 ], shown[ frame ] ) / Step;
+				var before = Turn( shown[ frame - 2 ], shown[ frame - 1 ] ) / Step;
+				worst = MathF.Max( worst, (speed - before).Length() );
+			}
+		}
+		output.WriteLine( $"largest change of turning speed in a frame {worst:F2} rad/s" );
+		// Added as rotation vectors, the two offsets composed wrongly and the bone jumped some 30 degrees in the second turn's
+		// frame; composed as rotations no frame changes the turning speed by more than the budget allows.
+		Assert.True( worst <= PoseInertializer.TurnBudget * Step + 0.05f, $"{worst:F2} rad/s" );
+		Assert.True( Angle( shown[ ^1 ], Quaternion.Normalize( Quaternion.CreateFromAxisAngle( Vector3.UnitX, 1.75f )
+			* Quaternion.CreateFromAxisAngle( Vector3.UnitZ, 1.2f ) ) ) < 0.01f );
+	}
+
+	// The turn taking one rotation onto the next, as a rotation vector the shorter way round.
+	private static Vector3 Turn( Quaternion from, Quaternion to )
+	{
+		var turn = Quaternion.Normalize( to * Quaternion.Conjugate( from ) );
+		if ( turn.W < 0f )
+			turn = Quaternion.Negate( turn );
+		var axis = new Vector3( turn.X, turn.Y, turn.Z );
+		var sine = axis.Length();
+		return sine < 1e-7f ? axis * 2f : axis * (2f * MathF.Atan2( sine, turn.W ) / sine);
+	}
+
 	private static void Given( SkeletonPose pose, int bone, Vector3 position, Quaternion rotation )
 	{
 		pose.Positions[ bone ] = position;

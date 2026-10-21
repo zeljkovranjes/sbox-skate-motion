@@ -114,7 +114,19 @@ internal sealed class PoseInertializer
 			{
 				var rate = turned / delta;
 				if ( _seen > 1 )
-					Follow( ref _turnOffset[ bone ], ref _turnOffsetRate[ bone ], rate - _givenTurnRate[ bone ], turnStep, TurnBudget, FastestTurn, y, delta );
+				{
+					// The shown bone turns on from where it was shown at its new rate, and the offset is what then stands
+					// between it and the given turn. Added as rotation vectors instead, an offset easing over one turn and a
+					// given turn about another axis composed wrongly: a grab's forearm turned 103 degrees in a frame as the
+					// other hand's grab joined it, with an offset still out from the first, and the shown arm jumped 29.
+					var shown = Quaternion.Normalize( Exp( _turnOffset[ bone ] ) * _givenTurn[ bone ] );
+					var offset = _turnOffset[ bone ];
+					Follow( ref offset, ref _turnOffsetRate[ bone ], rate - _givenTurnRate[ bone ], turnStep, TurnBudget, FastestTurn, y, delta );
+					shown = Quaternion.Normalize( Exp( (rate + _turnOffsetRate[ bone ]) * delta ) * shown );
+					_turnOffset[ bone ] = offset == Vector3.Zero && _turnOffsetRate[ bone ] == Vector3.Zero
+						? Vector3.Zero
+						: Log( shown * Quaternion.Conjugate( rotation ) );
+				}
 				_givenTurnRate[ bone ] = rate;
 			}
 			_givenTurn[ bone ] = rotation;

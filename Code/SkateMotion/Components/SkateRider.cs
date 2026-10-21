@@ -160,6 +160,9 @@ public sealed class SkateRider : Component
 	private int _gesture;
 	internal GameObject VisualObject => _animator?.Visual;
 
+	/// <summary>Reads the stock walk the rider's legs follow on foot, once a frame after every update.</summary>
+	internal void ReadLegs() => _animator?.ReadLegs();
+
 	// Where the rider is shown this frame, smoothed between fixed steps; the camera follows it on foot and in a bail.
 	internal Transform ShownTransform => _animator?.Smoother.At( WorldTransform, Time.Now ) ?? WorldTransform;
 
