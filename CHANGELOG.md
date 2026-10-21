@@ -1,72 +1,59 @@
 # Changelog
 
 ## 2026-10-21
-Title: A Shake Before the Call, and Powerslides That Stop
+Title: Smooth Motion, Planted Feet, Grabs That Hold, and a Board That Comes When Called
 ### Added
 # Controls
 Shaking before it flies - SkateRider.RecallShake (seconds, 0 by default) has a board called from more than 200 in away tremble where it lies first, growing stronger and rising up to 5 in off the ground (jittering up to 1.5 in and 14 degrees), then fly from there
 Board called - SkateRider.BoardCalled( shake, flight ) is raised where the rider is simulated as its board is called to the hand, with the seconds it shakes and then flies, so a game can time a sound or an effect to it
-### Fixed
-# Physics
-Powerslides gliding sideways - while powersliding the wheels keep only a share of their grip (so the board can swing across its travel), and nothing else slowed it: a held slide from a fast push glided sideways for over four seconds (1.7 m/s^2, on grass as on concrete). Turned across its travel the board now scrubs as sliding urethane does, up to 3 m/s^2 more as far as it is across: the same slide stops in 1.9 s (4.2 m/s^2)
-
-## 2026-10-21
-Title: Calling the Board Home
-### Added
-# Controls
 Recall range and sight - SkateRider.RecallRange (metres, 30 by default) sets how far the board is called back to the hand from, and SkateRider.RecallNeedsSight (on by default) whether it must be in sight; off, it flies back through whatever is in the way. From farther than 30 m it comes at 70 m/s (BoardReach.RecallSeconds; within 30 m it flies as before)
 Stand at - SkateRider.StandAt( place ) puts a riding rider on its feet at a place of the game's choosing (a player taking its place there), leaving the board where it is; unlike Dismount it needs no room beside the board
-### Changed
-# Board
-A board more than 200 in from the hand is called as the reach begins (0.34 s into the pickup) instead of when the reach clip's hand is out: it takes its flight's time to come and arrives as the arm comes out. A call from 20 m now takes about 1.3 s from the pickup's start (was about 1.7)
-# Camera
-On foot the camera starts behind the rider's own facing, not the board's: a board called from afar lies any way, and the camera could start in front of the rider
-
-## 2026-10-21
-Title: A Real Grip, Responsive Walking and Riders That Walk for Everyone
-### Added
-# Controls
 Responsive walking - SkateRider.ResponsiveWalking makes walking and carrying the board answer the controls as a game's own player controller does: full speed in about 0.15 s (was 0.36), a stop in about 0.2 s, a turn keeps its speed while the way the rider goes swings round at up to 1080 degrees a second and the body follows at 900, and pushing the stick takes over from a landing's clip. A turn no longer slows the rider into a stop clip and runs on out of it, and letting go for under a tenth of a second (going from one key to another) keeps the walk's clips going. Off (the default) walking eases in and out as before
 # Networking
 Other players walk and carry - another player's rider walks, carries the board and rides as its owner does: the owner's mode is shared, and its walk and run are shown from how fast its synced place moves
-# Animation
-Blend from a body - SkateRider.BlendFrom( modelPose, seconds ) blends the rider's first poses from a body pose (model-space bones in the rider model's order), such as the player's own body as it was, so a rider taking a player's place shows no jump
-### Fixed
-# Animation
-Board resting on the thumb - a carried board was placed by each clip's own grip, and for a rider whose hand differs from the clips' skater that put the deck over the thumb; the fit that moves the deck out of the fingers kept every finger on the side it started on, so it stayed there. In a settled grip the deck now sits between the thumb (over it) and the fingers (under it), and a finger found inside the deck goes clear at once rather than over a few frames
-Board sliding in the hand - followed clip by clip, the board slid up to 1.5 in through the hand between standing, running and the air. It now keeps the place in the hand the clips settle it into as it is taken (over the first half second), as a grip does, and goes wherever the hand goes
-Arm pumping out and in - the arm reaching out to keep the board clear of the legs jumped out up to an inch in a frame and swung out and back with every stride of a run. It now follows as a critically damped spring, quick out and slow back in, and stays out through a run (largest step in a frame 0.32 in)
-Placeholder pose in a hippy jump - a hippy jump that took off while the graph was elsewhere (push and brake let go together before its wind-up, or over a pop's) found no state below the board to play and showed the graph's placeholder: the rider stood upright and still, lifted above the deck. It now comes into the jump's flight by its hurdle (is-hippy-hurdling)
-Ragdoll from the bind pose - a bail cleared the clips' bone overrides before the ragdoll took up the pose, so it could start from the model's bind pose; it now takes the last pose first
-
-## 2026-10-21
-Title: Crowded Servers, Sleeping Boards and No T-Pose
-### Added
-# Networking
 Boards simulated by their owner - a board is now simulated by its network owner, or by the host when it has none, instead of always by the host. Give the rider ownership (GameObject.Network.AssignOwnership) and the rider's own client simulates the board it rides: its input reaches the board with no round trip, and the host pays for no board but those nobody owns. A peer taking a board over carries on from where the board was last seen; input set where a board is not simulated goes to its owner (from the driver only, which the host still chooses). The board's synced state (speed, wheels, air, bail, balance, grind) is written by whoever simulates it
 Bails seen by everyone - another player's rider falls as the rider's owner saw it: the owner's bail (and how the board was moving as it let go) is shared, each client ragdolls its own copy of that rider, and puts it away when the rider is back on the board. The bail's release velocity, position and spin now reach a rider driving from a client too, so its ragdoll flies with the board's speed instead of dropping where it stood
+# Animation
+Pose continuity - every bone of the rider carries on from what was shown (PoseInertializer, before the board and hand fits): a bone's speed changes by no more than a budget in any frame (600 rad/s^2 turning, 150 m/s^2 moving), the rest taken up as an offset that goes back to the pose as fast as its 0.04 s half-life asks, no faster than 8 rad/s and without passing it. A clip handing over, a key's corner shown at a high frame rate, a hand pose switching in or a pose jumping in a frame shows as a quick ease: in a flip session the worst change of a bone's speed before the fits fell from 7.6 to 5.1 in a frame (at 60 fps) and the frames over 3 from 34 to 21
+Grabs that hold - a hand that reaches the board in a grab or a hand plant takes hold of the shown deck where it is, closing onto it (up to 2.5 in), and stays on that place, turned with the deck, until 0.15 s before the landing whatever the clip's hand does; letting go eases back over 0.12 s. Fitted only, an indy's hand slid 6.7 in along the toe edge while it held it and a melon's never reached the deck. A grab's reach plays up to 1.6x as fast as authored so the hand is on the board before the grab is let go for the landing, which is now 0.3 s before it (was 0.4)
+Catching a called board - a board called to the hand from afar flies to the carrying hand itself (its middle a hand's breadth off the palm), and that hand reaches out for it, open, as it comes (from 0.45 s out, at its speed), then closes on it as the carry takes over. It flew to where a pickup clip has its own board, by the hip, while the clip raised the other hand
+Planted feet - a foot standing on the deck stays where it stands for as long as the clip keeps it there, turning as the clip turns it, and steps (lifted 1.5 in) only when the clip's place has moved more than 5 in; once the clip lifts it, it eases off its place over 0.12 s. The feet slid back along the deck into each clip's stance: 4-5 in at every ollie's wind-up, and 0.6 s after every landing a step back that read as a slide. Over a trick session the feet slid 245 in over the deck, now 90 in (mostly a push's front foot pivoting)
+TwoBoneIk.TurnEnd - turns the end bone (a hand) and everything below it about its own place
+Blend from a body - SkateRider.BlendFrom( modelPose, seconds ) blends the rider's first poses from a body pose (model-space bones in the rider model's order), such as the player's own body as it was, so a rider taking a player's place shows no jump
 # Performance
 Sleeping boards - a board no one rides that has lain within half an inch and a degree of where it was for a second falls asleep (Skateboard.Asleep): its step is skipped until it is ridden, moved (picked up, knocked, placed) or reset, and it wakes carrying on from where it was put. Most boards in a busy game are lying about; asleep they cost nothing
 Distance posing - another player's rider far from the camera is posed less often: every second frame from 12 m, every fourth from 24 m and every eighth from 48 m, each pose covering the time since the last. A crowd of riders costs about what a few near ones do; the player's own rider is posed every frame
 # Physics
 Hardest landing - Skateboard.HardestLanding sets the speed into the ground (m/s) above which a landing bails, in place of the profile's (zero keeps it): a flat landing off a 3 m drop comes down at about 7.7 m/s, off 6 m about 10.8 and off 10 m about 14. A landing tipped too far still bails at any speed
-### Fixed
+### Changed
+# Board
+A board more than 200 in from the hand is called as the reach begins (0.34 s into the pickup) instead of when the reach clip's hand is out: it takes its flight's time to come and arrives as the arm comes out. A call from 20 m now takes about 1.3 s from the pickup's start (was about 1.7)
+# Camera
+On foot the camera starts behind the rider's own facing, not the board's: a board called from afar lies any way, and the camera could start in front of the rider
 # Animation
+Landing hand-back - landing, the shown board goes over to the physical one from where it was shown, carried on as it was moving and slowing, over a time long enough that it turns no faster than 6 rad/s. A board turned 72-80 degrees under the feet in the air (a board adjust held through the landing) swung back in 0.15 s at 630-810 degrees a second; it now takes about 0.33 s at 340-360
+Flip sweep - in the air a deck rolling over (a kickflip, a heelflip) drops away from the feet (up to 3 in, along the body's down) and the feet lift out of the cylinder it sweeps, each at no more than 80 in/s, coming back as the catch stops the roll
+### Fixed
+# Physics
+Powerslides gliding sideways - while powersliding the wheels keep only a share of their grip (so the board can swing across its travel), and nothing else slowed it: a held slide from a fast push glided sideways for over four seconds (1.7 m/s^2, on grass as on concrete). Turned across its travel the board now scrubs as sliding urethane does, up to 3 m/s^2 more as far as it is across: the same slide stops in 1.9 s (4.2 m/s^2)
+Window - the map is gathered 4 m each way around the board and gathered again after 2 m (was 12 m and 4 m), contacts offered from 1 m around its bodies (was 2 m): every contact a step can take stays inside the window with 0.7 m to spare
+Stalls on real maps - the board copied every collider in the scene the moment it started (or was reset) and went through every one of their triangles every physics step, and its wheel sweeps tested every triangle of the collider they hit, which on a level's world mesh is all of it: a map of 20,000 triangles and 300 props ran at 1.6 fps (627 ms frames) and a real map froze the game. The board now gathers only the collision within 12 m of itself, again as it travels, offers each step only the triangles within 2 m of its parts, and finds them through a grid over each large shape, which a board's wheel sweeps and contacts share and read once. The same map rides at 90 fps (11 ms frames, 22 ms at most); 180,000 triangles and 2,000 props, 11 ms (28 ms at most); nearly a million triangles and 5,000 props, 11 ms with one 107 ms frame as the board first reads the floor
+# Animation
+Feet through a flipping deck - pushed out along the deck's up axis alone, a foot went to the deck's other face through it as the deck turned past edge on, and stood up to 1.4 in in it for four frames at a flip's catch; legs over 0.5 in deep fell from 19 frames to 3 in a flip session (deepest 0.7 in)
+Fingers in the deck - fingers in a grab stood up to 0.5 in inside the deck. A hand in the deck now goes out the shortest way (up, down, or past the deck's edge or end, read from the deck model's outline so any board fits), at up to 120 in/s, and eases back
+Hands never fitted to the board - a hand's nearness to its board was measured from the wrist with a foot's reach, so no hand on a board counted as near and the hand fit never acted; a hand now counts from its wrist with a palm's span and from its middle fingertip
+Finger flips - a finger whose segment pointed nearly the other way from its source's had no shortest arc to aim along and flipped for a frame (a ring finger 25 in/s out and back); the aim now fades out between 60 and 120 degrees of disagreement
+Board resting on the thumb - a carried board was placed by each clip's own grip, and for a rider whose hand differs from the clips' skater that put the deck over the thumb; the fit that moves the deck out of the fingers kept every finger on the side it started on, so it stayed there. In a settled grip the deck now sits between the thumb (over it) and the fingers (under it), and a finger found inside the deck goes clear at once rather than over a few frames
+Board sliding in the hand - followed clip by clip, the board slid up to 1.5 in through the hand between standing, running and the air. It now keeps the place in the hand the clips settle it into as it is taken (over the first half second), as a grip does, and goes wherever the hand goes
+Arm pumping out and in - the arm reaching out to keep the board clear of the legs jumped out up to an inch in a frame and swung out and back with every stride of a run. It now follows as a critically damped spring, quick out and slow back in, and stays out through a run (largest step in a frame 0.32 in)
+Placeholder pose in a hippy jump - a hippy jump that took off while the graph was elsewhere (push and brake let go together before its wind-up, or over a pop's) found no state below the board to play and showed the graph's placeholder: the rider stood upright and still, lifted above the deck. It now comes into the jump's flight by its hurdle (is-hippy-hurdling)
+Ragdoll from the bind pose - a bail cleared the clips' bone overrides before the ragdoll took up the pose, so it could start from the model's bind pose; it now takes the last pose first
 T-pose at the start of a ride - a new rider's first frames (and, for a moment, any state the graph enters from nothing) gave no usable pose, empty or NaN bone rotations, and the model drew its bind pose, standing straight up in a T, until the graph's first blend finished (about 0.2 s; over a second when the clips loaded on the same frame). The rider's model is now hidden until its first usable pose, posed the frame it appears, and a frame without a usable pose keeps the last one (SkeletonPose.Usable)
 Rider teardown before its start - a rider removed before it started threw from OnDisabled
+Rider update error on ramps and with the stick - the fingers' pose streams were kept in a fixed 64 commands, and the riding blend mixes many clips at once with a controller's stick part way over or on a slope: past about ten clips the stream overflowed and the rider's whole update threw every frame ("Pose commands exceed the allocated stream capacity"). The hand layer now grows its streams to the largest blend it samples, once
 # Performance
 Map gathering on real levels - a level's world body is a great many small shapes and reaches into every window, and the window kept every shape of a body that did: on a dense level each gathering welded the edges of 25,000 triangles (12-15 ms, a hitch every few metres) and every physics substep walked every shape (0.22 ms). Only shapes whose own bounds reach into the window are kept now: the same ride gathers 30 to 90 triangles (0.55 ms) and a substep's contacts take 0.02 ms. A ridden board's whole step on that level went from 2.2 ms to about 1.3 ms
 Edge welding - the same edge codes from storage without a list per edge or per grid cell, and the resting-surface grid built only when an open edge needs it: 1.4 to 1.8 times faster on 7,500 and 47,000 triangle meshes, identical codes on those and on 300 random meshes. A gathering resets only the codes the last window wrote, not a whole level mesh's
-# Physics
-Window - the map is gathered 4 m each way around the board and gathered again after 2 m (was 12 m and 4 m), contacts offered from 1 m around its bodies (was 2 m): every contact a step can take stays inside the window with 0.7 m to spare
-
-## 2026-10-21
-Title: Big Maps, Big Blends and Pushing Past the Stick Crouch
-### Fixed
-# Physics
-Stalls on real maps - the board copied every collider in the scene the moment it started (or was reset) and went through every one of their triangles every physics step, and its wheel sweeps tested every triangle of the collider they hit, which on a level's world mesh is all of it: a map of 20,000 triangles and 300 props ran at 1.6 fps (627 ms frames) and a real map froze the game. The board now gathers only the collision within 12 m of itself, again as it travels, offers each step only the triangles within 2 m of its parts, and finds them through a grid over each large shape, which a board's wheel sweeps and contacts share and read once. The same map rides at 90 fps (11 ms frames, 22 ms at most); 180,000 triangles and 2,000 props, 11 ms (28 ms at most); nearly a million triangles and 5,000 props, 11 ms with one 107 ms frame as the board first reads the floor
-# Animation
-Rider update error on ramps and with the stick - the fingers' pose streams were kept in a fixed 64 commands, and the riding blend mixes many clips at once with a controller's stick part way over or on a slope: past about ten clips the stream overflowed and the rider's whole update threw every frame ("Pose commands exceed the allocated stream capacity"). The hand layer now grows its streams to the largest blend it samples, once
 # Input
 Crouching while pushing with the stick forward - a controller's left stick held forward asks for the crouch (to pump through transitions), and it is also how a player rolls straight, so pushing with it held crouched the rider mid-stroke. The stick's crouch now gives way while either device pushes; a pulled trigger and the pump key still crouch
 

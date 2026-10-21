@@ -116,6 +116,15 @@ internal sealed class TwoBoneIk
 			positions[ bone ] += shift;
 	}
 
+	/// <summary>Turns the end bone (a hand) and everything hanging from it about the end's own place.</summary>
+	internal void TurnEnd( Span<Vector3> positions, Span<Quaternion> rotations, Quaternion turn )
+	{
+		var pivot = positions[ _end ];
+		rotations[ _end ] = Quaternion.Normalize( turn * rotations[ _end ] );
+		foreach ( var bone in _endTree )
+			Rotate( positions, rotations, bone, pivot, pivot, turn );
+	}
+
 	/// <summary>
 	/// Keeps the middle bone (the elbow) within <paramref name="most"/> radians of <paramref name="before"/>, a direction it
 	/// pointed from the line between the first bone and the end a moment ago, turning it back round that line if it has

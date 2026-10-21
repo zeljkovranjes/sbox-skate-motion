@@ -569,8 +569,10 @@ internal sealed class RiderAnimator
 
 	private HippyJump _hippyJump;
 
-	// Seconds before touchdown that a held grab lets go.
-	private const float GrabRelease = 0.4f;
+	// Seconds before touchdown that a held grab lets go: long enough for the grab's release to take the hand off the board
+	// before the landing, short enough that a grab off a flat ollie is held for a moment (let go 0.4 s ahead, it was let go
+	// as the hand reached the board).
+	internal const float GrabRelease = 0.3f;
 
 	// A grab let go for the landing stays let go through the landing until the grab is let go of, even where the landing
 	// can no longer be seen ahead in the last moments (a grab still held on touching down is not a ground grab); clearly

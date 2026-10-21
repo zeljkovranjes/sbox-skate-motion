@@ -143,16 +143,28 @@ internal sealed class ClipRiderAnimation
 	private const float EntryLiftFull = 2f;
 	private const float EntryReach = 16f;
 
-	// A foot standing on the deck as the board lands stays where it came down on the deck (in the shown deck's frame), and
-	// turned as it came down, for LandingPlant seconds; then it steps to where the clip and the fit put it over StepTime,
-	// lifted off the deck by up to StepLift, unless it is already within StepFrom of it. The landing clips blend the air
-	// pose into the riding one, which slid the feet along the deck in the first fifth of a second after touchdown (3.7 in
-	// after a kickflip). A foot the clip lifts off its board lets go at once.
+	// A foot standing on the deck stays where it stands on it (in the shown deck's frame) for as long as the clip keeps it
+	// standing on its board, as a skater's feet do. The clips' stances differ (an ollie's wind-up has the front foot 4-5 in
+	// further back than riding's; a landing's feet come down wherever the trick put them), and followed, the feet slid
+	// back along the deck into each clip's stance: 4-5 in at every wind-up, and 0.6 s after every landing a step of a 0.8
+	// in lift back to the riding stance that read as a slide. A foot landing turns as it came down for LandingPlant
+	// seconds; standing, it turns as the clip turns it (a push's front foot pivoting), easing over StandTurn. Only when
+	// the clip's place has moved further than StandSlack does the foot step to it, over StepTime, lifted by up to StepLift.
+	// Once the clip lifts the foot off its board (a push, a pop, a flip) or the board leaves the ground, the foot eases off
+	// the place it stood over StandRelease rather than jumping to the clip's.
 	private const float LandingPlant = 0.6f;
 	private const float StepTime = 0.25f;
-	private const float StepLift = 0.8f;
-	private const float StepFrom = 0.3f;
+	private const float StepLift = 1.5f;
+	private const float StandSlack = 5f;
+	private const float StandTurn = 10f;
+	private const float StandRelease = 0.12f;
 	private const float PlantStanding = 0.3f;
+
+	// How each foot eases off the place it stood: its offset from the clip's place there (model frame) and its turn
+	// against the deck as it let go, and how far it still has to go (1 to 0).
+	private System.Numerics.Vector3[] _letGoOffset;
+	private System.Numerics.Quaternion[] _letGoTurn;
+	private float[] _letGoWeight;
 	private readonly Vector3?[] _stepFrom;
 	private readonly System.Numerics.Quaternion[] _stepTurnFrom;
 	private readonly float[] _stepProgress;
@@ -207,6 +219,29 @@ internal sealed class ClipRiderAnimation
 	// How fast (per second) a hand's pull onto the board ridden eases in and out, and the most (inches) it moves the hand.
 	private const float HandFitRate = 12f;
 	private const float HandFitReach = 10f;
+
+	// A grabbing hand's hold on the shown deck (see Hold): whether it holds, how far over to the hold it is (0 to 1), and
+	// where on the deck (the hand in the shown deck's frame) it took hold. It takes hold once the clip's hand is that near
+	// its board (see RiderBoardFit.Nearness) and lets go under HoldOff; taking hold eases over HoldTake (the hand is
+	// already there), letting go over HoldRelease.
+	private readonly bool[] _holding = new bool[ 2 ];
+	private readonly float[] _hold = new float[ 2 ];
+	private readonly Transform[] _held = new Transform[ 2 ];
+	private const float HoldOn = 0.8f;
+	private const float HoldOff = 0.45f;
+
+	// A hand that took hold in a grab keeps it, whatever the clip's hand does, until this long before the board lands:
+	// the grab is let go ahead of the landing (RiderAnimator.GrabRelease) and its release clip takes the clip's hand off the
+	// board at once, so off a flat ollie a hand held the board for 60-90 ms.
+	private const float HoldLetGo = 0.15f;
+	private const float HoldTake = 0.08f;
+
+	// Furthest (inches) a hand taking hold is moved onto the deck.
+	private const float HoldClose = 2.5f;
+	private const float HoldRelease = 0.12f;
+
+	// Every bone moves on continuously from what was shown (see PoseInertializer).
+	private readonly PoseInertializer _continuity = new();
 	private float _boardShown;
 	private Transform _animatedBoard;
 	private readonly HashSet<string> _stanceSwapClips;
@@ -555,6 +590,8 @@ internal sealed class ClipRiderAnimation
 		_stepFrom = new Vector3?[ _feet.Length ];
 		_stepTurnFrom = new System.Numerics.Quaternion[ _feet.Length ];
 		_stepProgress = new float[ _feet.Length ];
+		_shownStand = new Vector3[ _feet.Length ];
+		_shownStandTurn = new System.Numerics.Quaternion[ _feet.Length ];
 		_footTree = new int[ _feet.Length ][];
 		for ( var i = 0; i < _feet.Length; i++ )
 			_footTree[ i ] = Enumerable.Range( 0, parents.Length ).Where( bone => Below( parents, bone, _feet[ i ].Ankle ) ).ToArray();
@@ -722,7 +759,10 @@ internal sealed class ClipRiderAnimation
 		// the rider's: the body keeps the last one it showed (a new rider stays hidden until it has one) rather than
 		// dropping into its bind pose, the T, or standing up straight.
 		if ( !(requested ? _motionPose : _statePose).Usable || State == Placeholder )
+		{
+			_continuity.Reset();
 			return;
+		}
 		ShowSource( requested ? _motionPose : _statePose, requested, delta );
 		if ( TrackStance() )
 		{
@@ -750,6 +790,10 @@ internal sealed class ClipRiderAnimation
 		_breathing.Update( input, _handling is { Active: true }, delta );
 		_breathing.Apply( _layered );
 		var pose = _fingers?.Update( _layered, FingerClip( delta, out var fingerTime ), fingerTime, _parameters, _handling, delta ) ?? _layered;
+		// Every bone carries on from what was shown, its speed changing by no more than a budget a frame (see
+		// PoseInertializer): a clip handing over, a key's corner at a high frame rate, a layer or the fingers' poses switching
+		// in or a pose jumping shows as a quick ease rather than a snap. The fits below then put the feet and hands on the board.
+		_continuity.Apply( pose, delta );
 		_retargeter.Apply( pose, mirror, _positions, _rotations );
 		_fit.Update( _skateboard, _retargeter.Scale );
 		var riding = input.Activity == RiderActivity.Riding;
@@ -762,6 +806,7 @@ internal sealed class ClipRiderAnimation
 		}
 		MatchPushToGround( riding, input.Speed, delta );
 		MatchAirTime( input, delta );
+		MatchGrabReach( input, delta );
 		for ( var i = 0; i < _feet.Length; i++ )
 			_kneeHint[ i ] = KneeDirection( _feet[ i ], _kneeHint[ i ], _positions );
 		// While riding, the clip's board bone sits on the real deck rather than the clip's travel root. Getting on it is put
@@ -830,6 +875,10 @@ internal sealed class ClipRiderAnimation
 				_footCarry[ i ] = null;
 				_deckPush[ i ] = 0f;
 				_plant[ i ] = 0f;
+				_plantedAt[ i ] = null;
+				_stepFrom[ i ] = null;
+				if ( _letGoWeight is not null )
+					_letGoWeight[ i ] = 0f;
 			}
 		}
 		var facing = SkateUnits.ToEngine( _retargeter.Facing );
@@ -875,17 +924,25 @@ internal sealed class ClipRiderAnimation
 		if ( riding && Finite( model ) && Finite( boardShown ) && Finite( _positions[ 0 ] ) )
 		{
 			boardShown = SettleBoard( model, boardShown, delta, !string.IsNullOrEmpty( input.Grind ) );
+			_deckInModelBefore = _deckInModel;
+			_deckInModel = model.ToLocal( boardShown );
+			boardShown = DropForFlip( model, boardShown, delta, input.Airborne && string.IsNullOrEmpty( input.Grind ) );
 			for ( var i = 0; i < _feet.Length; i++ )
 			{
 				OutOfDeck( i, model, boardShown, delta, !string.IsNullOrEmpty( input.Grind ), input.Airborne );
 				PlantOffDeck( i, model, boardShown, !input.Airborne && !input.OffBoard, delta );
 				OutOfRails( i, model, delta );
+				OverTheEdge( i, model, boardShown, delta, input.Airborne && string.IsNullOrEmpty( input.Grind ) );
 			}
-			FitHands( model, boardShown, mirror, delta );
+			// A grab's hold is kept until just before the landing (see HoldLetGo), its release clip playing meanwhile.
+			FitHands( model, boardShown, mirror, input.Airborne && State?.Contains( ".GrabsTweaks." ) == true
+				&& input.TimeToLand > HoldLetGo, input.Handplant is not null, delta );
 		}
 		else
 		{
 			_settle = 0f;
+			_flipDrop = 0f;
+			LetGoOfDeck();
 			// Getting on, the feet are kept out of the deck as they step onto it, so riding does not start by pushing them
 			// out in one frame; off the board a push left from riding eases out instead of the leg dropping in one frame.
 			if ( Finite( model ) && Finite( boardShown ) && Finite( _positions[ 0 ] ) )
@@ -907,6 +964,7 @@ internal sealed class ClipRiderAnimation
 			SoleDeckGaps[ 0 ] = SoleDeckGaps[ 1 ] = null;
 		_model = model;
 		Catch( input, model, delta );
+		ReachForCall( input, model, mirror, delta );
 		CarriedBoardPose = !riding && (input.HoldingBoard || input.Activity == RiderActivity.PickingUp)
 			? CarryPose( model, mirror, input.HoldingBoard && input.Activity is not (RiderActivity.PickingUp
 				or RiderActivity.Dropping or RiderActivity.Throwing), !input.HoldingBoard, delta,
@@ -1015,6 +1073,15 @@ internal sealed class ClipRiderAnimation
 			model.Rotation * SkateUnits.ToEngine( pose.Rotation ), _board.WorldScale );
 		// The grip is kept first, then the deck fitted between the thumb and fingers of the hand as posed now; while the grip
 		// still settles (the pickup's clip handing over to the carry's) the fingers keep the sides they are on.
+		// A called board flies to the hand itself, not to where a pickup clip has its own board (by the feet, as its hand
+		// reaches down for it): its middle comes to a hand's breadth off the palm, toward where the clip has it.
+		if ( reaching && _called )
+		{
+			var palm = model.PointToWorld( SkateUnits.ToEngine( _positions[ hand ] ) );
+			var off = held.Position - palm;
+			if ( off.Length > CatchInHand )
+				held = held.WithPosition( palm + off.Normal * CatchInHand );
+		}
 		held = HoldInHand( held, model, hand, carried, delta );
 		held = OutOfHand( held, model, hand, carried && _heldFor >= GripSettle, delta );
 		held = CatchGive( held, model, hand );
@@ -1280,6 +1347,102 @@ internal sealed class ClipRiderAnimation
 			_catchElapsed = _catchElapsed + delta > CatchTime * 8f ? -1f : _catchElapsed + delta;
 	}
 
+	// Called to the hand from afar (a pickup begun with the board further than CallReach from the carrying hand: called
+	// back, or picked up beyond reach), the board flies to the hand, and the hand reaches out for it, open, as it comes:
+	// from CatchReachFrom seconds out (at the board's speed) the carrying arm reaches toward where its hand will hold the
+	// incoming board, fully by CatchReachFull, never locking straight, and its fingers open flat; the board lands in the
+	// open hand, which closes on it as the carry takes over, and the catch's give (see CatchGive) brings it in. Taken from
+	// the clip alone, a pickup clip's other hand was raised while the board flew to where that clip has its own board, by
+	// the hip, beside a hand that never moved for it.
+	private bool _called;
+	private bool _wasPickingUp;
+	private float _callReach;
+	private const float CallReach = 60f;
+	private const float CatchInHand = 6f;
+	private const float CatchReachFrom = 0.45f;
+	private const float CatchReachFull = 0.12f;
+	private const float CatchReachRelease = 0.15f;
+
+	private void ReachForCall( in RiderAnimationInput input, Transform model, bool mirror, float delta )
+	{
+		var hand = mirror ? _mirroredCarryHand : _carryHand;
+		var picking = input.Activity == RiderActivity.PickingUp && !input.HoldingBoard;
+		if ( picking && !_wasPickingUp && hand >= 0 )
+			_called = (_board.WorldPosition - model.PointToWorld( SkateUnits.ToEngine( _positions[ hand ] ) )).Length > CallReach;
+		if ( !picking && !input.HoldingBoard )
+			_called = false;
+		_wasPickingUp = picking;
+		var wanted = 0f;
+		var target = System.Numerics.Vector3.Zero;
+		if ( picking && _called && hand >= 0 && _flightSeen )
+		{
+			var board = SkateUnits.ToCore( model.PointToLocal( _board.WorldPosition ) );
+			var toBoard = board - _positions[ hand ];
+			var distance = toBoard.Length();
+			var closing = MathF.Max( -System.Numerics.Vector3.Dot( _flightVelocity, distance > 1e-3f ? toBoard / distance : System.Numerics.Vector3.Zero ), 1f );
+			var arriving = distance / closing;
+			wanted = Smoothstep( (CatchReachFrom - arriving) / (CatchReachFrom - CatchReachFull) );
+			// Where the hand will hold the board: a hand's breadth back from its middle, toward the hand.
+			target = distance > CatchInHand ? board - toBoard / distance * CatchInHand : _positions[ hand ];
+		}
+		_callReach = wanted >= _callReach ? wanted : Approach( _callReach, wanted, delta / CatchReachRelease );
+		if ( _callReach <= 0f || hand < 0 || !_arms.TryGetValue( hand, out var arm ) )
+			return;
+		if ( wanted > 0f )
+			_reachTarget = target;
+		Reach( arm, hand, System.Numerics.Vector3.Lerp( _positions[ hand ], _reachTarget, _callReach ), true );
+		OpenFingers( hand, _callReach );
+	}
+
+	private System.Numerics.Vector3 _reachTarget;
+
+	// Opens a hand's fingers toward the rig's own rest (a flat hand) by the given share: each joint's turn against the one
+	// before it eases onto its rest turn, the joints past it following.
+	private void OpenFingers( int hand, float share )
+	{
+		if ( !_fingerChains.TryGetValue( hand, out var fingers ) || share <= 0f || _renderer.Model is not { } rig )
+			return;
+		foreach ( var chain in fingers.Chains )
+		{
+			for ( var joint = 0; joint < chain.Length; joint++ )
+			{
+				var bone = chain[ joint ];
+				if ( RestTurn( rig, bone ) is not { } known || known.Parent < 0 )
+					continue;
+				var (rest, parent) = known;
+				var local = System.Numerics.Quaternion.Conjugate( _rotations[ parent ] ) * _rotations[ bone ];
+				var opened = System.Numerics.Quaternion.Normalize( _rotations[ parent ] * System.Numerics.Quaternion.Slerp( local, rest, share ) );
+				var turn = System.Numerics.Quaternion.Normalize( opened * System.Numerics.Quaternion.Conjugate( _rotations[ bone ] ) );
+				var pivot = _positions[ bone ];
+				_rotations[ bone ] = opened;
+				for ( var after = joint + 1; after < chain.Length; after++ )
+				{
+					var next = chain[ after ];
+					_positions[ next ] = pivot + System.Numerics.Vector3.Transform( _positions[ next ] - pivot, turn );
+					_rotations[ next ] = System.Numerics.Quaternion.Normalize( turn * _rotations[ next ] );
+				}
+			}
+		}
+	}
+
+	// A bone's rest turn against its parent in the rig, and that parent, cached.
+	private readonly Dictionary<int, (System.Numerics.Quaternion Turn, int Parent)> _restTurns = new();
+
+	private (System.Numerics.Quaternion Turn, int Parent)? RestTurn( Model rig, int bone )
+	{
+		if ( _restTurns.TryGetValue( bone, out var known ) )
+			return known;
+		foreach ( var each in rig.Bones.AllBones )
+		{
+			if ( each.Index != bone )
+				continue;
+			var found = (SkateUnits.ToCore( each.LocalTransform.Rotation ), each.Parent?.Index ?? -1);
+			_restTurns[ bone ] = found;
+			return found;
+		}
+		return null;
+	}
+
 	// The catch's give: the arrival velocity carried on and eased back, t * exp( -t / CatchTime ), its furthest reach
 	// limited to a share of this rider's forearm. The holding arm reaches the moved hand.
 	private Transform CatchGive( Transform held, Transform model, int hand )
@@ -1433,6 +1596,9 @@ internal sealed class ClipRiderAnimation
 		// clip's board lies the other way up): it stays the way up it was shown.
 		if ( airborne || _boardShown <= 0f )
 			_letGo = null;
+		var physical = _skateboard.RenderTransform;
+		if ( Landing( airborne, riding, animated, physical, delta ) is { } landed )
+			return landed;
 		if ( !airborne && _boardShown > 0f && (!riding || _letGo is not null
 			|| Vector3.Dot( animated.Rotation.Up, _skateboard.DisplayedTransform.Rotation.Up ) < 0f) )
 		{
@@ -1453,7 +1619,100 @@ internal sealed class ClipRiderAnimation
 		_boardShown = Math.Clamp( _boardShown + (airborne ? rate : -rate), 0f, 1f );
 		_skateboard.SetDisplayPose( animated, _boardShown );
 		_skateboard.HoldSlidePitch( riding && State?.Contains( ".Grinding." ) == true );
+		// In the air the shown board's place on the physical one is kept, for a landing to carry it on from.
+		if ( airborne && _boardShown > 0f && Finite( physical ) )
+		{
+			_shownOnBefore = _shownOn;
+			_shownOn = physical.ToLocal( _skateboard.DisplayedTransform );
+			_shownStep = delta;
+		}
+		else
+		{
+			_shownOn = _shownOnBefore = null;
+		}
 		return _skateboard.DisplayedTransform;
+	}
+
+	// Landing while riding, the shown board goes over to the physical one from where it was shown, carried on as it was
+	// moving against the physical board and slowing (over LandCarry), and over a time long enough that it turns no faster
+	// than HandBackTurn and moves no faster than HandBackMove beyond the physical board, easing in and out. Handed back
+	// in a fixed 0.15 s from the clips' board, a board turned under the feet in the air (a board adjust held through the
+	// landing, 72-80 degrees round) swung back at 500 degrees a second the moment it landed, the feet with it.
+	private Transform? Landing( bool airborne, bool riding, Transform animated, Transform physical, float delta )
+	{
+		var landing = !airborne && riding && _boardShown > 0f && _letGo is null && Finite( physical )
+			&& Vector3.Dot( animated.Rotation.Up, _skateboard.DisplayedTransform.Rotation.Up ) >= 0f;
+		if ( !landing )
+		{
+			_landFrom = null;
+			return null;
+		}
+		if ( _landFrom is null )
+		{
+			if ( _shownOn is not { } from )
+				return null;
+			_landFrom = from;
+			_landMove = Vector3.Zero;
+			_landTurn = System.Numerics.Vector3.Zero;
+			if ( _shownOnBefore is { } before && _shownStep > 0f )
+			{
+				_landMove = (from.Position - before.Position) / _shownStep;
+				_landTurn = TurnBetween( SkateUnits.ToCore( before.Rotation ), SkateUnits.ToCore( from.Rotation ) ) / _shownStep;
+			}
+			var turn = TurnBetween( System.Numerics.Quaternion.Identity, SkateUnits.ToCore( from.Rotation ) ).Length() + _landTurn.Length() * LandCarry;
+			var move = from.Position.Length + _landMove.Length * LandCarry;
+			_landLength = MathF.Max( BoardHandBack, 1.5f * MathF.Max( turn / HandBackTurn, move / HandBackMove ) );
+			_landTime = 0f;
+			_landWeight = _boardShown;
+		}
+		_landTime += delta;
+		var start = _landFrom.Value;
+		var carried = LandCarry * (1f - MathF.Exp( -_landTime / LandCarry ));
+		var dead = new Transform( start.Position + _landMove * carried,
+			SkateUnits.ToEngine( TurnBy( _landTurn * carried ) ) * start.Rotation, start.Scale );
+		animated = physical.ToWorld( dead );
+		_boardShown = _landTime >= _landLength ? 0f : _landWeight * (1f - Smoothstep( _landTime / _landLength ));
+		if ( _boardShown <= 0f )
+			_landFrom = null;
+		_animatedBoard = animated;
+		_skateboard.SetDisplayPose( animated, _boardShown );
+		_skateboard.HoldSlidePitch( State?.Contains( ".Grinding." ) == true );
+		_shownOn = _shownOnBefore = null;
+		return _skateboard.DisplayedTransform;
+	}
+
+	// The shown board in the physical board's frame over the last two frames in the air, and the time between them; a
+	// landing's start, how it was moving then (inches a second, and radians a second as a rotation vector, in the physical
+	// board's frame), how long it has been going, how long it takes, and the shown weight it started at.
+	private Transform? _shownOn;
+	private Transform? _shownOnBefore;
+	private float _shownStep;
+	private Transform? _landFrom;
+	private Vector3 _landMove;
+	private System.Numerics.Vector3 _landTurn;
+	private float _landTime;
+	private float _landLength;
+	private float _landWeight;
+	private const float LandCarry = 0.03f;
+	private const float HandBackTurn = 6f;
+	private const float HandBackMove = 40f;
+
+	// The rotation vector (axis times radians) turning one rotation into another, the shorter way round.
+	private static System.Numerics.Vector3 TurnBetween( System.Numerics.Quaternion from, System.Numerics.Quaternion to )
+	{
+		var turn = System.Numerics.Quaternion.Normalize( to * System.Numerics.Quaternion.Conjugate( from ) );
+		if ( turn.W < 0f )
+			turn = System.Numerics.Quaternion.Negate( turn );
+		var axis = new System.Numerics.Vector3( turn.X, turn.Y, turn.Z );
+		var sine = axis.Length();
+		return sine < 1e-7f ? axis * 2f : axis * (2f * MathF.Atan2( sine, turn.W ) / sine);
+	}
+
+	private static System.Numerics.Quaternion TurnBy( System.Numerics.Vector3 turn )
+	{
+		var angle = turn.Length();
+		return angle < 1e-7f || !float.IsFinite( angle ) ? System.Numerics.Quaternion.Identity
+			: System.Numerics.Quaternion.CreateFromAxisAngle( turn / angle, angle );
 	}
 
 	// Where the shown board was as the rider let go of it, and where the physical board was then, while it is handed back.
@@ -1732,6 +1991,12 @@ internal sealed class ClipRiderAnimation
 	private System.Numerics.Vector3 Planted( int index, System.Numerics.Vector3 target, Transform model, Transform board,
 		bool airborne, bool loose, float onItsBoard, float delta )
 	{
+		if ( _letGoWeight is null || _letGoWeight.Length != _feet.Length )
+		{
+			_letGoOffset = new System.Numerics.Vector3[ _feet.Length ];
+			_letGoTurn = new System.Numerics.Quaternion[ _feet.Length ];
+			_letGoWeight = new float[ _feet.Length ];
+		}
 		// A landing plants each foot the first frame it stands on the deck, within PlantWindow of touching down.
 		if ( airborne )
 		{
@@ -1745,16 +2010,14 @@ internal sealed class ClipRiderAnimation
 			_framesLanded[ index ]++;
 		}
 		var landing = _sinceAirborne[ index ] <= PlantWindow || _framesLanded[ index ] <= 3;
-		if ( airborne || loose || onItsBoard < PlantStanding )
-		{
-			_plantedAt[ index ] = null;
-			_plantedTurn[ index ] = null;
-			_stepFrom[ index ] = null;
-			return target;
-		}
-		var wanted = board.PointToLocal( model.PointToWorld( SkateUnits.ToEngine( target ) ) );
 		var deck = SkateUnits.ToCore( model.Rotation.Inverse * board.Rotation );
 		var foot = _feet[ index ];
+		if ( airborne || loose || onItsBoard < PlantStanding )
+		{
+			LetGoOfStand( index, target, model, board, deck );
+			return EasedOff( index, target, deck, delta );
+		}
+		var wanted = board.PointToLocal( model.PointToWorld( SkateUnits.ToEngine( target ) ) );
 		var wantedTurn = System.Numerics.Quaternion.Normalize( System.Numerics.Quaternion.Conjugate( deck ) * _rotations[ foot.Ankle ] );
 		// Only a foot that comes down over the deck is planted (its ball over the deck's outline); one beside it is the pull's.
 		if ( _plantPending[ index ] && landing && !OverDeck( target, model, board, foot ) )
@@ -1767,52 +2030,105 @@ internal sealed class ClipRiderAnimation
 			_plantPending[ index ] = false;
 			_stepFrom[ index ] = null;
 		}
+		else if ( _plantedAt[ index ] is null && !landing && OverDeck( target, model, board, foot ) )
+		{
+			// Standing on the deck otherwise (riding on, back on after a push): planted where it stands, turning with the clip.
+			_plantedAt[ index ] = wanted;
+			_plantedTurn[ index ] = wantedTurn;
+			_plantAge[ index ] = LandingPlant;
+			_stepFrom[ index ] = null;
+		}
 		if ( _plantedAt[ index ] is not { } planted )
-			return target;
+			return EasedOff( index, target, deck, delta );
+		_letGoWeight[ index ] = 0f;
 		_plantAge[ index ] += delta;
 		var turn = _plantedTurn[ index ] ?? wantedTurn;
 		if ( _plantAge[ index ] > LandingPlant )
 		{
-			if ( _stepFrom[ index ] is null )
+			turn = System.Numerics.Quaternion.Slerp( turn, wantedTurn, 1f - MathF.Exp( -StandTurn * delta ) );
+			_plantedTurn[ index ] = turn;
+			if ( _stepFrom[ index ] is null && (wanted - planted).Length > StandSlack )
 			{
-				// Close enough already: the foot is simply let go where it is.
-				if ( (wanted - planted).Length <= StepFrom )
-				{
-					_plantedAt[ index ] = null;
-					_plantedTurn[ index ] = null;
-					return target;
-				}
 				_stepFrom[ index ] = planted;
 				_stepTurnFrom[ index ] = turn;
 				_stepProgress[ index ] = 0f;
 			}
-			_stepProgress[ index ] = MathF.Min( 1f, _stepProgress[ index ] + delta / StepTime );
-			var progress = _stepProgress[ index ];
-			var eased = progress * progress * (3f - 2f * progress);
-			planted = Vector3.Lerp( _stepFrom[ index ].Value, wanted, eased ) + Vector3.Up * (StepLift * MathF.Sin( MathF.PI * progress ));
-			turn = System.Numerics.Quaternion.Slerp( _stepTurnFrom[ index ], wantedTurn, eased );
-			if ( progress >= 1f )
+			if ( _stepFrom[ index ] is { } from )
 			{
-				_plantedAt[ index ] = null;
-				_plantedTurn[ index ] = null;
-				_stepFrom[ index ] = null;
+				_stepProgress[ index ] = MathF.Min( 1f, _stepProgress[ index ] + delta / StepTime );
+				var progress = _stepProgress[ index ];
+				var eased = progress * progress * (3f - 2f * progress);
+				planted = Vector3.Lerp( from, wanted, eased ) + Vector3.Up * (StepLift * MathF.Sin( MathF.PI * progress ));
+				turn = System.Numerics.Quaternion.Slerp( _stepTurnFrom[ index ], wantedTurn, eased );
+				if ( progress >= 1f )
+				{
+					// Planted again where it stepped to.
+					_plantedAt[ index ] = wanted;
+					_plantedTurn[ index ] = wantedTurn;
+					_stepFrom[ index ] = null;
+				}
 			}
 		}
+		_shownStand[ index ] = planted;
+		_shownStandTurn[ index ] = turn;
 		// The foot keeps its turn against the deck: it and the bones below it turn about the ankle onto it.
-		var keep = System.Numerics.Quaternion.Normalize( deck * turn
-			* System.Numerics.Quaternion.Conjugate( _rotations[ foot.Ankle ] ) );
-		if ( float.IsFinite( keep.X + keep.Y + keep.Z + keep.W ) )
-		{
-			var pivot = _positions[ foot.Ankle ];
-			_rotations[ foot.Ankle ] = keep * _rotations[ foot.Ankle ];
-			foreach ( var bone in _footTree[ index ] )
-			{
-				_positions[ bone ] = pivot + System.Numerics.Vector3.Transform( _positions[ bone ] - pivot, keep );
-				_rotations[ bone ] = keep * _rotations[ bone ];
-			}
-		}
+		TurnFoot( index, System.Numerics.Quaternion.Normalize( deck * turn * System.Numerics.Quaternion.Conjugate( _rotations[ foot.Ankle ] ) ) );
 		var held = SkateUnits.ToCore( model.PointToLocal( board.PointToWorld( planted ) ) );
 		return Finite( held ) ? held : target;
+	}
+
+	// Where each planted foot was last shown on the deck (the shown deck's frame) and turned against it, for letting go.
+	private Vector3[] _shownStand;
+	private System.Numerics.Quaternion[] _shownStandTurn;
+
+	// A planted foot lets go: it eases off from where it was shown (see StandRelease).
+	private void LetGoOfStand( int index, System.Numerics.Vector3 target, Transform model, Transform board, System.Numerics.Quaternion deck )
+	{
+		if ( _plantedAt[ index ] is not null )
+		{
+			var held = SkateUnits.ToCore( model.PointToLocal( board.PointToWorld( _shownStand[ index ] ) ) );
+			if ( Finite( held ) && Finite( target ) )
+			{
+				_letGoOffset[ index ] = held - target;
+				_letGoTurn[ index ] = deck * _shownStandTurn[ index ];
+				_letGoWeight[ index ] = 1f;
+			}
+		}
+		_plantedAt[ index ] = null;
+		_plantedTurn[ index ] = null;
+		_stepFrom[ index ] = null;
+	}
+
+	// The clip's place for a foot, eased in from where it let go of the deck.
+	private System.Numerics.Vector3 EasedOff( int index, System.Numerics.Vector3 target, System.Numerics.Quaternion deck, float delta )
+	{
+		if ( !(_letGoWeight[ index ] > 0f) )
+			return target;
+		_letGoWeight[ index ] = MathF.Max( 0f, _letGoWeight[ index ] - delta / StandRelease );
+		var share = Smoothstep( _letGoWeight[ index ] );
+		if ( share <= 0f )
+			return target;
+		var foot = _feet[ index ];
+		var turn = System.Numerics.Quaternion.Normalize( _letGoTurn[ index ] * System.Numerics.Quaternion.Conjugate( _rotations[ foot.Ankle ] ) );
+		if ( turn.W < 0f )
+			turn = System.Numerics.Quaternion.Negate( turn );
+		TurnFoot( index, System.Numerics.Quaternion.Slerp( System.Numerics.Quaternion.Identity, turn, share ) );
+		return target + _letGoOffset[ index ] * share;
+	}
+
+	// Turns a foot and the bones below it about its ankle.
+	private void TurnFoot( int index, System.Numerics.Quaternion keep )
+	{
+		if ( !float.IsFinite( keep.X + keep.Y + keep.Z + keep.W ) )
+			return;
+		var foot = _feet[ index ];
+		var pivot = _positions[ foot.Ankle ];
+		_rotations[ foot.Ankle ] = keep * _rotations[ foot.Ankle ];
+		foreach ( var bone in _footTree[ index ] )
+		{
+			_positions[ bone ] = pivot + System.Numerics.Vector3.Transform( _positions[ bone ] - pivot, keep );
+			_rotations[ bone ] = keep * _rotations[ bone ];
+		}
 	}
 
 	// The first frame riding after getting on: whether this foot steps over from where it was shown (see EntryReach), and if
@@ -1901,8 +2217,10 @@ internal sealed class ClipRiderAnimation
 
 	// A hand the clip has on its board (a grab, a hand on the nose or tail) holds the same place on the board ridden: its
 	// own nose, tail or edge, however much longer, shorter or wider it is than the clips' board. The pull eases in and out
-	// with how near the clip's hand is to its board, and moves the hand no further than HandFitReach.
-	private void FitHands( Transform model, Transform board, bool mirror, float delta )
+	// with how near the clip's hand is to its board (its wrist within a palm's span, see RiderBoardFit.Holding), and moves
+	// the hand no further than HandFitReach. A hand that has reached the board then takes hold of it (see Hold), and no
+	// hand is ever shown in the deck (see HandOutOfDeck).
+	private void FitHands( Transform model, Transform board, bool mirror, bool grabbing, bool planting, float delta )
 	{
 		var blend = 1f - MathF.Exp( -HandFitRate * delta );
 		for ( var side = 0; side < 2; side++ )
@@ -1912,16 +2230,358 @@ internal sealed class ClipRiderAnimation
 			if ( source < 0 || !_arms.TryGetValue( hand, out var arm ) )
 				continue;
 			var onBoard = _retargeter.SourceRelative( source, _anchor, mirror );
-			_handFit[ side ] += (_fit.Nearness( onBoard ) - _handFit[ side ]) * blend;
-			if ( _handFit[ side ] < 0.001f || !Finite( onBoard ) )
-				continue;
-			var shift = model.Rotation.Inverse * (board.Rotation * (SwitchTurn * SkateUnits.ToEngine( _fit.Hand( onBoard ) - onBoard )));
-			if ( shift.Length > HandFitReach )
-				shift = shift.Normal * HandFitReach;
-			if ( shift.Length > 0.001f )
-				Reach( arm, hand, _positions[ hand ] + SkateUnits.ToCore( shift ) * _handFit[ side ] );
+			var near = Finite( onBoard ) ? _fit.Holding( onBoard ) : 0f;
+			// A hand reaching down over the deck's edge (a melon's) has its wrist 6 in over the deck: its fingertip says it is on it.
+			var tip = Rig[ side == 0 ? "left_middle3" : "right_middle3" ];
+			var tipSource = tip < 0 ? -1 : _retargeter.SourceBone( tip, mirror );
+			if ( tipSource >= 0 && _retargeter.SourceRelative( tipSource, _anchor, mirror ) is var onTip && Finite( onTip ) )
+				near = MathF.Max( near, _fit.Holding( onTip, _fit.TipSpan ) );
+			_handFit[ side ] += (near - _handFit[ side ]) * blend;
+			if ( _handFit[ side ] >= 0.001f && Finite( onBoard ) )
+			{
+				var shift = model.Rotation.Inverse * (board.Rotation * (SwitchTurn * SkateUnits.ToEngine( _fit.Hand( onBoard ) - onBoard )));
+				if ( shift.Length > HandFitReach )
+					shift = shift.Normal * HandFitReach;
+				if ( shift.Length > 0.001f )
+					Reach( arm, hand, _positions[ hand ] + SkateUnits.ToCore( shift ) * _handFit[ side ] );
+			}
+			Hold( side, arm, hand, model, board, near >= HoldOn && (grabbing || planting), near >= HoldOff || grabbing, delta );
+			HandOutOfDeck( side, arm, hand, model, board, delta );
 		}
 	}
+
+	// A hand that has reached the board (a grab, a hand plant's board hand) takes hold of it where it is: from then until
+	// the clip's hand leaves its board it stays on that place of the shown deck, turned with it, however the clip's hand
+	// slides over its own board or the deck turns and tweaks under it, on any board. Fitted only, an indy's hand slid 6 in
+	// along the toe edge while it held it and a melon's hung 9 in off the deck. Letting go eases back to the clip's hand.
+	// The rider's grab input is no guide: it lets go ahead of a landing while the clip's hand is still on the board; a grab
+	// keeps its hold to HoldLetGo before the landing instead.
+	private void Hold( int side, TwoBoneIk arm, int hand, Transform model, Transform board, bool takes, bool keeps, float delta )
+	{
+		if ( !_holding[ side ] && takes && Finite( board ) )
+		{
+			var at = new Transform( model.PointToWorld( SkateUnits.ToEngine( _positions[ hand ] ) ),
+				model.Rotation * SkateUnits.ToEngine( _rotations[ hand ] ) );
+			if ( Finite( at ) )
+			{
+				// The hand closes onto the deck as it takes hold: a hand reaching it a little short (a melon's, 0.8 in off) holds
+				// it, not the air beside it.
+				if ( HandGap( board, model, hand ) is { } gap && gap.Length < HoldClose )
+					at = at.WithPosition( at.Position + gap );
+				_held[ side ] = board.ToLocal( at );
+				_holding[ side ] = true;
+			}
+		}
+		else if ( _holding[ side ] && !keeps )
+		{
+			_holding[ side ] = false;
+		}
+		_hold[ side ] = Approach( _hold[ side ], _holding[ side ] ? 1f : 0f, delta / (_holding[ side ] ? HoldTake : HoldRelease) );
+		if ( _hold[ side ] <= 0f )
+			return;
+		var weight = Smoothstep( _hold[ side ] );
+		var held = board.ToWorld( _held[ side ] );
+		if ( !Finite( held ) )
+			return;
+		var place = SkateUnits.ToCore( model.PointToLocal( held.Position ) );
+		Reach( arm, hand, System.Numerics.Vector3.Lerp( _positions[ hand ], place, weight ) );
+		var turn = System.Numerics.Quaternion.Normalize( SkateUnits.ToCore( model.Rotation.Inverse * held.Rotation )
+			* System.Numerics.Quaternion.Conjugate( _rotations[ hand ] ) );
+		if ( turn.W < 0f )
+			turn = System.Numerics.Quaternion.Negate( turn );
+		arm.TurnEnd( _positions, _rotations, System.Numerics.Quaternion.Slerp( System.Numerics.Quaternion.Identity, turn, weight ) );
+	}
+
+	// The move (world) putting the hand's nearest point (a finger or the palm, with its thickness) against the shown deck,
+	// from the deck model's outline and surfaces; null with no finger rig or nothing near the deck.
+	private Vector3? HandGap( Transform board, Transform model, int hand )
+	{
+		if ( _skateboard is null || !_fingerChains.TryGetValue( hand, out var fingers ) || _skateboard.DeckBounds is not { } box )
+			return null;
+		var points = HandPoints( model, hand );
+		var count = points.Count;
+		var wrist = model.PointToWorld( SkateUnits.ToEngine( _positions[ hand ] ) );
+		foreach ( var chain in fingers.Chains )
+			points.Add( (Vector3.Lerp( wrist, model.PointToWorld( SkateUnits.ToEngine( _positions[ chain[ 0 ] ] ) ), 0.5f ),
+				fingers.Radius * PalmThickness) );
+		Vector3? best = null;
+		var nearest = float.MaxValue;
+		foreach ( var (point, radius) in points )
+		{
+			var local = board.PointToLocal( point );
+			var x = Math.Clamp( local.x, box.Mins.x, box.Maxs.x );
+			if ( _fit.HalfWidthAt( x, true ) is not { } left || _fit.HalfWidthAt( x, false ) is not { } right )
+				continue;
+			var y = Math.Clamp( local.y, -right, left );
+			if ( _skateboard.DeckSurface( x, y ) is not { } surface )
+				continue;
+			var closest = new Vector3( x, y, Math.Clamp( local.z, surface.Bottom, surface.Top ) );
+			var away = local - closest;
+			var distance = away.Length;
+			var thickness = (board.PointToLocal( point + board.Rotation.Up * radius ) - local).Length;
+			if ( distance < 1e-4f || distance - thickness >= nearest )
+				continue;
+			nearest = distance - thickness;
+			best = board.Rotation * (-away / distance * MathF.Max( 0f, distance - thickness ));
+		}
+		points.RemoveRange( count, points.Count - count );
+		return best;
+	}
+
+	// Off the board (or with nothing to fit) every hold lets go and no hand is moved for its fingers.
+	private void LetGoOfDeck()
+	{
+		for ( var side = 0; side < 2; side++ )
+		{
+			_holding[ side ] = false;
+			_hold[ side ] = 0f;
+			_handExit[ side ] = Vector3.Zero;
+			_handWay[ side ] = -1;
+		}
+	}
+
+	// No hand is shown in the deck: when its palm or fingers are in it the hand goes out by the shortest way, from the
+	// shape of the deck model ridden so any board fits: up off its top or down off its underside (each finger staying on
+	// the side its knuckle is on, so a hand round the edge is not closed onto the deck's middle), or out past its nearer
+	// edge or end, which a hand round the edge takes. Along each of the deck's axes going out further follows at up to
+	// HandExitRise (a hand taking the way out past the edge at once jumped 3 in in a frame) and coming back eases. Fitted only, an indy's fingers stood half an inch inside the deck,
+	// and cleared along the deck's up axis alone the hand round its edge rose 2-3.5 in off it.
+	private void HandOutOfDeck( int side, TwoBoneIk arm, int hand, Transform model, Transform board, float delta )
+	{
+		var wanted = Vector3.Zero;
+		if ( _skateboard is not null && _fingerChains.ContainsKey( hand ) && Finite( board ) )
+			wanted = HandExit( board, model, hand, side );
+		var current = _handExit[ side ];
+		var follow = 1f - MathF.Exp( -HandRelease * delta );
+		for ( var axis = 0; axis < 3; axis++ )
+		{
+			var now = current[ axis ];
+			var want = wanted[ axis ];
+			var deeper = MathF.Abs( want ) >= MathF.Abs( now ) && (now == 0f || MathF.Sign( want ) == MathF.Sign( now ));
+			now = deeper ? MathF.Sign( want ) * MathF.Min( MathF.Abs( want ), MathF.Abs( now ) + HandExitRise * delta )
+				: MathX.Lerp( now, want, follow );
+			current[ axis ] = MathF.Abs( now ) < 0.005f ? 0f : now;
+		}
+		_handExit[ side ] = current;
+		if ( current.IsNearlyZero( 0.005f ) )
+			return;
+		Reach( arm, hand, _positions[ hand ] + SkateUnits.ToCore( model.Rotation.Inverse * (board.Rotation * current) ) );
+	}
+
+	// The shortest move (the shown deck's frame, inches) taking the hand's palm and fingers out of the deck, or zero.
+	// Up and down move every point together, so they keep every finger on the side of the deck its knuckle is on and fail
+	// when the hand is closed tighter than the deck is thick; out past an edge or an end only moves points away from the
+	// deck. A way out once taken is kept until another is shorter by HandExitBias.
+	private Vector3 HandExit( Transform board, Transform model, int hand, int side )
+	{
+		var points = HandPoints( model, hand );
+		var wrist = model.PointToWorld( SkateUnits.ToEngine( _positions[ hand ] ) );
+		var count = points.Count;
+		// The palm, from the wrist to each knuckle.
+		if ( _fingerChains.TryGetValue( hand, out var fingers ) )
+		{
+			foreach ( var chain in fingers.Chains )
+			{
+				var knuckle = model.PointToWorld( SkateUnits.ToEngine( _positions[ chain[ 0 ] ] ) );
+				points.Add( (Vector3.Lerp( wrist, knuckle, 0.5f ), fingers.Radius * PalmThickness) );
+				_handChains.Add( -1 );
+			}
+		}
+		// Up: every point above its side's face; down: every point beneath it.
+		var lowest = float.MinValue;
+		var highest = float.MaxValue;
+		Span<float> across = stackalloc float[ 4 ];
+		var any = false;
+		var finger = -2;
+		var above = false;
+		for ( var i = 0; i < points.Count; i++ )
+		{
+			var (point, radius) = points[ i ];
+			var local = board.PointToLocal( point );
+			if ( _skateboard.DeckSurface( local.x, local.y ) is not { } surface )
+				continue;
+			var thickness = (board.PointToLocal( point + board.Rotation.Up * radius ) - local).Length;
+			var middle = (surface.Top + surface.Bottom) * 0.5f;
+			var chain = _handChains[ i ];
+			if ( chain < 0 || chain != finger )
+			{
+				finger = chain;
+				above = local.z >= middle;
+			}
+			if ( above )
+				lowest = MathF.Max( lowest, surface.Top + thickness - local.z );
+			else
+				highest = MathF.Min( highest, surface.Bottom - thickness - local.z );
+			if ( local.z >= surface.Top + thickness || local.z <= surface.Bottom - thickness )
+				continue;
+			any = true;
+			var left = _fit.HalfWidthAt( local.x, true ) ?? local.y;
+			var right = _fit.HalfWidthAt( local.x, false ) ?? -local.y;
+			across[ 0 ] = MathF.Max( across[ 0 ], left + thickness - local.y );
+			across[ 1 ] = MathF.Max( across[ 1 ], local.y + right + thickness );
+			if ( _skateboard.DeckBounds is { } box )
+			{
+				across[ 2 ] = MathF.Max( across[ 2 ], box.Maxs.x + thickness - local.x );
+				across[ 3 ] = MathF.Max( across[ 3 ], local.x - box.Mins.x + thickness );
+			}
+			else
+			{
+				across[ 2 ] = across[ 3 ] = float.MaxValue;
+			}
+		}
+		points.RemoveRange( count, points.Count - count );
+		_handChains.RemoveRange( count, _handChains.Count - count );
+		if ( !any )
+		{
+			_handWay[ side ] = -1;
+			return Vector3.Zero;
+		}
+		// The ways out: 0 up or down, 1 to the left, 2 to the right, 3 past the nose, 4 past the tail.
+		var vertical = lowest == float.MinValue && highest == float.MaxValue ? 0f
+			: lowest <= highest ? Math.Clamp( 0f, lowest, highest ) : float.NaN;
+		Span<float> cost = stackalloc float[ 5 ];
+		cost[ 0 ] = float.IsNaN( vertical ) ? float.MaxValue : MathF.Abs( vertical );
+		for ( var way = 0; way < 4; way++ )
+			cost[ way + 1 ] = across[ way ];
+		var best = 0;
+		for ( var way = 1; way < 5; way++ )
+		{
+			if ( cost[ way ] < cost[ best ] )
+				best = way;
+		}
+		var kept = _handWay[ side ];
+		if ( kept >= 0 && kept != best && cost[ kept ] < float.MaxValue && cost[ kept ] <= cost[ best ] + HandExitBias )
+			best = kept;
+		_handWay[ side ] = best;
+		return best switch
+		{
+			0 => new Vector3( 0f, 0f, vertical ),
+			1 => new Vector3( 0f, across[ 0 ], 0f ),
+			2 => new Vector3( 0f, -across[ 1 ], 0f ),
+			3 => new Vector3( across[ 2 ], 0f, 0f ),
+			_ => new Vector3( -across[ 3 ], 0f, 0f )
+		};
+	}
+
+	// How each hand is moved out of the deck (the shown deck's frame, inches), the way out it took (-1 none), how much
+	// shorter another way must be to be taken instead (inches), and the palm's thickness against a finger's.
+	private readonly Vector3[] _handExit = new Vector3[ 2 ];
+	private readonly int[] _handWay = { -1, -1 };
+	private const float HandExitBias = 0.3f;
+	private const float HandExitRise = 120f;
+	private const float PalmThickness = 1.6f;
+
+	// In the air the feet keep out of the deck as it flips: a deck rolling over about its long axis sweeps out a cylinder
+	// as wide as itself, and each foot is kept outside it (away from the axis, toward the hips for a foot above the deck),
+	// by as much of that as the deck is rolling, against the body, past FlipRoll (fully past FlipRolling). The sweep does
+	// not turn with the deck, so what it asks changes smoothly however fast the deck spins: it comes in as the flick spins
+	// the board up and goes as the catch stops it. The board takes most of it, dropping away under the feet (see
+	// DropForFlip) as a flipped board does, and the feet lift the rest, each at no more than SweepRise; both come back
+	// at the deck's push release as the catch stops the roll. Pushed along the deck's up axis alone, the push went from one
+	// face's to the other's through nothing as the deck turned past edge on, and a foot stood 1.4 in in the deck for four
+	// frames at a kickflip's catch; lifted over the nearer edge instead the way out was up to 4.6 in and the shin jumped
+	// in a frame, and lifted out of the sweep by the feet alone, at 200 in/s, the legs were thrown 3.6 in in three frames.
+	private float[] _edgeLift;
+	private const float FlipRoll = 3.5f;
+	private const float FlipRolling = 10f;
+	private const float SweepRise = 80f;
+	private const float DropShare = 0.6f;
+	private const float DropLimit = 3f;
+
+	// The shown deck in the model's frame this frame and the last: how fast it is rolling against the body.
+	private Transform? _deckInModel;
+	private Transform? _deckInModelBefore;
+
+	// How far down (inches, the body's down) the shown board has dropped away from the feet for its flip.
+	private float _flipDrop;
+
+	// How far into the sweep a foot is (inches, scaled by how fully the deck is rolling) and the way out of it (the shown
+	// deck's frame); nothing outside it or with the deck not rolling.
+	private (float Need, Vector3 Away) SweepNeed( (TwoBoneIk Leg, int Ankle, int Ball, float AnkleHeight, float BallHeight, System.Numerics.Vector3[] Sole, float ShinRadius) foot,
+		Transform model, Transform board, float delta )
+	{
+		if ( _boardShown <= 0f || Dark || _skateboard is null || !Finite( board ) || !(delta > 0f)
+			|| _deckInModel is not { } now || _deckInModelBefore is not { } before )
+			return (0f, Vector3.Zero);
+		// How fast the deck rolls about its own long axis against the body, radians a second.
+		var turn = TurnBetween( System.Numerics.Quaternion.Identity, SkateUnits.ToCore( now.Rotation * before.Rotation.Inverse ) );
+		var roll = MathF.Abs( System.Numerics.Vector3.Dot( turn, SkateUnits.ToCore( now.Rotation.Forward ) ) ) / delta;
+		var share = Smoothstep( (roll - FlipRoll) / (FlipRolling - FlipRoll) );
+		if ( share <= 0f )
+			return (0f, Vector3.Zero);
+		var deepest = 0f;
+		var away = Vector3.Zero;
+		foreach ( var (position, padding) in SolePoints( foot ) )
+		{
+			var local = board.PointToLocal( model.PointToWorld( SkateUnits.ToEngine( position ) ) );
+			if ( _skateboard.DeckBounds is { } box && (local.x < box.Mins.x || local.x > box.Maxs.x) )
+				continue;
+			var left = _fit.HalfWidthAt( local.x, true );
+			var right = _fit.HalfWidthAt( local.x, false );
+			if ( left is null && right is null )
+				continue;
+			var radius = MathF.Max( left ?? 0f, right ?? 0f ) + MathF.Max( padding, SoleMargin );
+			var off = MathF.Sqrt( local.y * local.y + local.z * local.z );
+			if ( off >= radius || radius - off <= deepest )
+				continue;
+			deepest = radius - off;
+			// Away from the axis; a point on it goes toward the hips.
+			var hip = board.PointToLocal( model.PointToWorld( SkateUnits.ToEngine( _positions[ foot.Leg.Upper ] ) ) );
+			away = off > 0.01f ? new Vector3( 0f, local.y, local.z ) / off : new Vector3( 0f, hip.y, hip.z ).Normal;
+		}
+		return (deepest * share, away);
+	}
+
+	// The shown board drops away from the feet as it flips, by DropShare of the deepest foot's way out of its sweep (no
+	// more than DropLimit), along the body's down: a flipped board turns over below the feet and rises to meet them at
+	// the catch. It drops no faster than SweepRise and comes back at the deck's push release.
+	private Transform DropForFlip( Transform model, Transform board, float delta, bool flying )
+	{
+		var wanted = 0f;
+		if ( flying )
+		{
+			foreach ( var foot in _feet )
+				wanted = MathF.Max( wanted, SweepNeed( foot, model, board, delta ).Need );
+		}
+		wanted = MathF.Min( wanted * DropShare, DropLimit );
+		_flipDrop = wanted >= _flipDrop ? MathF.Min( wanted, _flipDrop + SweepRise * delta )
+			: MathX.Lerp( _flipDrop, wanted, 1f - MathF.Exp( -DeckPushRelease * delta ) );
+		if ( _flipDrop < 0.01f )
+			_flipDrop = 0f;
+		if ( _flipDrop == 0f || _boardShown <= 0f )
+			return board;
+		// The shown pose blends physics and animation by the shown weight, so the animated pose carries the drop, with the
+		// board's give-way to the feet as it was settled.
+		var weight = MathF.Max( _boardShown, 0.25f );
+		var settled = _animatedBoard.Position + board.Rotation.Up * (_settle / weight);
+		_skateboard.SetDisplayPose( _animatedBoard.WithPosition( settled + model.Rotation.Down * (_flipDrop / weight) ), _boardShown );
+		return _skateboard.DisplayedTransform;
+	}
+
+	private void OverTheEdge( int index, Transform model, Transform board, float delta, bool flying )
+	{
+		var foot = _feet[ index ];
+		var (needed, away) = flying ? SweepNeed( foot, model, board, delta ) : (0f, Vector3.Zero);
+		if ( _edgeLift is null || _edgeLift.Length != _feet.Length )
+			_edgeLift = new float[ _feet.Length ];
+		if ( _edgeAway is null || _edgeAway.Length != _feet.Length )
+			_edgeAway = new Vector3[ _feet.Length ];
+		var current = _edgeLift[ index ];
+		current = needed >= current ? MathF.Min( needed, current + SweepRise * delta )
+			: MathX.Lerp( current, needed, 1f - MathF.Exp( -DeckPushRelease * delta ) );
+		if ( current < 0.01f )
+			current = 0f;
+		_edgeLift[ index ] = current;
+		if ( needed > 0f )
+			_edgeAway[ index ] = away;
+		if ( current == 0f )
+			return;
+		var lift = SkateUnits.ToCore( model.Rotation.Inverse * (board.Rotation * _edgeAway[ index ]) ) * current;
+		foot.Leg.Solve( _positions, _rotations, _positions[ foot.Ankle ] + lift, _kneeHint[ index ] );
+	}
+
+	// The way (the shown deck's frame) each foot is lifted out of the sweep.
+	private Vector3[] _edgeAway;
 
 	// A foot correction on a rail or in the air never straightens the leg: past SoftReach of the leg's length the target
 	// is drawn in, toward the full length but never reaching it, so a rider whose legs are shorter than the clip skater's,
@@ -2303,6 +2963,27 @@ internal sealed class ClipRiderAnimation
 		var speed = MathF.Max( _states.Graph.Play?.Speed ?? 1f, 0.01f );
 		var remaining = (clip.Length( _parameters ) - _states.Time) / speed;
 		_states.RateScale = AirTimeMatch.Rate( remaining, input.TimeToLand, delta );
+	}
+
+	// Riding, a grab's reach (the clip taking the hand to the board) is played fast enough for the hand to be on the board
+	// GrabHold seconds before the grab is let go for the landing (see RiderAnimator.GrabRelease), never slower than
+	// authored and no more than GrabReachFastest times as fast. Played as authored, an ollie on flat ground let go of the
+	// grab as the hand arrived: the hand touched the board and left it at once.
+	private const float GrabHold = 0.12f;
+	private const float GrabReachFastest = 1.6f;
+
+	private void MatchGrabReach( in RiderAnimationInput input, float delta )
+	{
+		if ( _states?.Clip is not { } clip || input.Activity != RiderActivity.Riding || !input.Airborne
+			|| State is not { } state || !state.Contains( ".GrabsTweaks." ) || !state.EndsWith( ".Into" ) )
+			return;
+		var speed = MathF.Max( _states.Graph.Play?.Speed ?? 1f, 0.01f );
+		var remaining = (clip.Length( _parameters ) - _states.Time) / speed;
+		if ( !(remaining > 0f) || !(input.TimeToLand > 0f) )
+			return;
+		var left = input.TimeToLand - RiderAnimator.GrabRelease - GrabHold;
+		var rate = left > 0.02f ? remaining / left : GrabReachFastest;
+		_states.RateScale = MathF.Max( _states.RateScale, Math.Clamp( rate, 1f, GrabReachFastest ) );
 	}
 
 	private void MatchPushToGround( bool riding, float boardSpeed, float delta )

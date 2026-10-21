@@ -18,6 +18,11 @@ internal sealed class RiderBoardFit
 	private BoardFit _scaledClips;
 	private BoardFit _ridden;
 	private float _reach;
+	private float _span;
+
+	// How far (clip metres) a wrist is from what its fingers close on: a hand holding the deck has its wrist about this
+	// far off it.
+	private const float HandSpan = 0.1f;
 
 	// The shown deck's outline: at stations evenly along its box, how far its surface reaches to its left and to its right
 	// (inches, the shown deck's frame; negative where its middle has no surface), read again when the deck's box changes.
@@ -45,6 +50,7 @@ internal sealed class RiderBoardFit
 	{
 		_scaledClips = _clips.Scaled( scale );
 		_reach = BoardFit.Reach * scale;
+		_span = HandSpan * scale;
 		_ridden = board?.Dimensions is { Wheelbase: > 0f, Length: > 0f, Width: > 0f } size
 			? new BoardFit( size.Wheelbase, size.Length, size.Width, MathF.Max( size.Thickness, 0.001f ) ).Scaled( SkateUnits.InchesPerMetre )
 			: _scaledClips;
@@ -88,6 +94,37 @@ internal sealed class RiderBoardFit
 		var share = Math.Clamp( 1f - BoardFit.OffDeck( point, _scaledClips ) / MathF.Max( _reach, 1e-4f ), 0f, 1f );
 		return share * share * (3f - 2f * share);
 	}
+
+	/// <summary>
+	/// How fully a hand the clips put with its wrist at <paramref name="wrist"/> holds their board: 1 within a palm's span
+	/// of the deck, easing to 0 within <see cref="BoardFit.Reach"/> further off. The wrist is a palm's length from what
+	/// the fingers close on: measured from the wrist as a foot is (see <see cref="Nearness"/>), a hand gripping the deck's
+	/// edge was 3.4 in off it and never counted as near.
+	/// </summary>
+	internal float Holding( NumericsVector wrist ) => Holding( wrist, _span );
+
+	/// <summary>
+	/// How fully a point of a hand the clips put at <paramref name="point"/> (a fingertip) is on their board: 1 within
+	/// <paramref name="span"/> (model units) of the deck, easing to 0 within <see cref="BoardFit.Reach"/> further off.
+	/// </summary>
+	internal float Holding( NumericsVector point, float span )
+	{
+		var off = MathF.Max( 0f, BoardFit.OffDeck( point, _scaledClips ) - span );
+		var share = Math.Clamp( 1f - off / MathF.Max( _reach, 1e-4f ), 0f, 1f );
+		return share * share * (3f - 2f * share);
+	}
+
+	/// <summary>
+	/// The shown deck's half width (inches, its frame) at a place along it, toward its left or its right; null past its
+	/// ends or where its middle has no surface.
+	/// </summary>
+	internal float? HalfWidthAt( float along, bool left ) => HalfWidth( along, left );
+
+	/// <summary>How far (model units) a fingertip may be from the clips' deck and still count as on it.</summary>
+	internal float TipSpan => _span * TipShare;
+
+	// A fingertip on the deck is about this share of a palm's span off its middle (the deck's half thickness, the finger's).
+	private const float TipShare = 0.3f;
 
 	/// <summary>
 	/// A board the clips put in a hand (its place and turn in the model's frame) moved so the hand grips the same place on

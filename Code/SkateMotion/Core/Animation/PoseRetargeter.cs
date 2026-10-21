@@ -262,8 +262,22 @@ internal sealed class PoseRetargeter
 			rotations[ bone ] * Quaternion.Conjugate( _bindRotations[ bone ] ) );
 		if ( wanted.LengthSquared() < 1e-10f || current.LengthSquared() < 1e-10f )
 			return;
-		rotations[ bone ] = Quaternion.Normalize( Between( current, wanted ) * rotations[ bone ] );
+		// A rest pose's angle error is small; a segment pointing nearly the other way from its source (a curled finger whose
+		// pose blends through a turn) has no shortest arc to trust, and aimed along it the bone flipped about a new axis for a
+		// frame (a ring finger 25 in/s each way). The aim fades out between AimTrusted and AimIgnored of disagreement.
+		var agreement = Vector3.Dot( Vector3.Normalize( current ), Vector3.Normalize( wanted ) );
+		var trust = Math.Clamp( (agreement - AimIgnored) / (AimTrusted - AimIgnored), 0f, 1f );
+		if ( trust <= 0f )
+			return;
+		var turn = Between( current, wanted );
+		if ( trust < 1f )
+			turn = Quaternion.Slerp( Quaternion.Identity, turn, trust * trust * (3f - 2f * trust) );
+		rotations[ bone ] = Quaternion.Normalize( turn * rotations[ bone ] );
 	}
+
+	// Cosines of the disagreement up to which a segment is aimed in full (60 degrees) and past which not at all (120).
+	private const float AimTrusted = 0.5f;
+	private const float AimIgnored = -0.5f;
 
 	// The mapped child that continues this bone's chain: the one whose source bone comes first. A finger continues
 	// only a finger, so a hand is never aimed at one of its fingers.
