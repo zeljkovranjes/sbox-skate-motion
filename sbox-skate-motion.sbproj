@@ -5,7 +5,7 @@
   "Ident": "chomnr_sbox_skate_motion",
   "Schema": 1,
   "IncludeSourceFiles": true,
-  "Resources": null,
+  "Resources": "data/skater/*",
   "PackageReferences": [],
   "EditorReferences": null,
   "Mounts": null,

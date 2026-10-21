@@ -5,7 +5,7 @@ using SkateMotion.Core.Animation;
 
 namespace SkateMotion.Engine;
 
-/// <summary>A clip set and the graph that plays it, read from the game's data folder.</summary>
+/// <summary>A clip set and the graph that plays it, read from the mounted files or the game's data folder (see RiderFiles).</summary>
 internal sealed class RiderAnimationAssets
 {
 	private RiderAnimationAssets( ClipSet clips, AnimationGraphDefinition graph )
@@ -33,9 +33,9 @@ internal sealed class RiderAnimationAssets
 		RetrievalProfile = BoardRetrievalProfile.Load( graph?.BoardRetrievalProfilePath );
 		if ( !string.IsNullOrWhiteSpace( graph?.PostureProfilePath ) )
 		{
-			if ( !FileSystem.Data.FileExists( graph.PostureProfilePath ) )
+			if ( !RiderFiles.Exists( graph.PostureProfilePath ) )
 				throw new FormatException( $"Posture profile is missing: {graph.PostureProfilePath}" );
-			var profile = Json.Deserialize<AnimationPostureProfile>( FileSystem.Data.ReadAllText( graph.PostureProfilePath ) )
+			var profile = Json.Deserialize<AnimationPostureProfile>( RiderFiles.ReadText( graph.PostureProfilePath ) )
 				?? throw new FormatException( "Posture profile is empty." );
 			Posture = profile.CreateProvider( clips.Skeleton );
 		}
@@ -58,14 +58,14 @@ internal sealed class RiderAnimationAssets
 		var banks = new List<HandPoseBank>();
 		foreach ( var hand in hands )
 		{
-			if ( !FileSystem.Data.FileExists( hand.Bank ) )
+			if ( !RiderFiles.Exists( hand.Bank ) )
 			{
-				Log.Warning( $"Hand pose bank not found in the data folder: {hand.Bank}" );
+				Log.Warning( $"Hand pose bank not found among the mounted files or in the data folder: {hand.Bank}" );
 				return System.Array.Empty<HandPoseBank>();
 			}
 			try
 			{
-				var bones = RawAnimationClipSet.Read( FileSystem.Data.ReadAllBytes( hand.Bank ) );
+				var bones = RawAnimationClipSet.Read( RiderFiles.Read( hand.Bank ) );
 				if ( skeleton.IndexOf( hand.Hand ) < 0 || bones.Find( hand.Clip ) is null
 					|| bones.Names.Any( name => skeleton.IndexOf( name ) >= 0 || banks.Any( bank => bank.Bones.Names.Contains( name ) ) ) )
 					throw new FormatException( $"it needs a clip {hand.Clip}, a hand bone {hand.Hand} in the clips and bone names of its own" );
@@ -80,24 +80,24 @@ internal sealed class RiderAnimationAssets
 		return banks;
 	}
 
-	/// <summary>Loads both files from <see cref="FileSystem.Data"/>; returns null and warns when either is missing.</summary>
+	/// <summary>Loads both files (see RiderFiles); returns null and warns when either is missing.</summary>
 	internal static RiderAnimationAssets Load( string clipsPath, string graphPath )
 	{
 		if ( string.IsNullOrWhiteSpace( clipsPath ) || string.IsNullOrWhiteSpace( graphPath ) )
 			return null;
-		if ( !FileSystem.Data.FileExists( clipsPath ) || !FileSystem.Data.FileExists( graphPath ) )
+		if ( !RiderFiles.Exists( clipsPath ) || !RiderFiles.Exists( graphPath ) )
 		{
-			Log.Warning( $"Rider animation files not found in the data folder ({FileSystem.Data.GetFullPath( "" )}): {clipsPath}, {graphPath}" );
+			Log.Warning( $"Rider animation files not found among the mounted files or in the data folder ({FileSystem.Data.GetFullPath( "" )}): {clipsPath}, {graphPath}" );
 			return null;
 		}
-		var clips = ClipSet.Read( FileSystem.Data.ReadAllBytes( clipsPath ) );
-		var graph = Json.Deserialize<AnimationGraphDefinition>( FileSystem.Data.ReadAllText( graphPath ) );
+		var clips = ClipSet.Read( RiderFiles.Read( clipsPath ) );
+		var graph = Json.Deserialize<AnimationGraphDefinition>( RiderFiles.ReadText( graphPath ) );
 		if ( !string.IsNullOrWhiteSpace( graph.RawPosePath ) )
 		{
 			if ( string.IsNullOrWhiteSpace( graph.AttributeBankPath ) )
 				throw new FormatException( "Raw rider poses require an accompanying attribute bank." );
-			var attributes = AnimationClipAttributeBank.Read( FileSystem.Data.ReadAllBytes( graph.AttributeBankPath ) );
-			var poses = RawAnimationClipSet.ReadWithAttributes( FileSystem.Data.ReadAllBytes( graph.RawPosePath ), attributes );
+			var attributes = AnimationClipAttributeBank.Read( RiderFiles.Read( graph.AttributeBankPath ) );
+			var poses = RawAnimationClipSet.ReadWithAttributes( RiderFiles.Read( graph.RawPosePath ), attributes );
 			clips.BindRawPoses( poses );
 		}
 		return new RiderAnimationAssets( clips, graph );

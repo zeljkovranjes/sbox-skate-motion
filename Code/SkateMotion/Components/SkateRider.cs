@@ -27,11 +27,20 @@ public sealed class SkateRider : Component
 	/// <summary>Ride with the right foot forward.</summary>
 	[Property] public bool Goofy { get; set; }
 
-	/// <summary>Clip set in the game's data folder (FileSystem.Data); empty uses the built-in animation.</summary>
-	[Property, Group( "Animation" )] public string AnimationClips { get; set; } = "";
+	/// <summary>
+	/// Clip set among the mounted files or in the game's data folder; by default the rider this package ships. Empty uses
+	/// the built-in animation.
+	/// </summary>
+	[Property, Group( "Animation" )] public string AnimationClips { get; set; } = DefaultAnimationClips;
 
-	/// <summary>Animation graph JSON in the game's data folder that tags and plays the clip set.</summary>
-	[Property, Group( "Animation" )] public string AnimationGraph { get; set; } = "";
+	/// <summary>Animation graph JSON that tags and plays the clip set, found as the clip set is.</summary>
+	[Property, Group( "Animation" )] public string AnimationGraph { get; set; } = DefaultAnimationGraph;
+
+	/// <summary>The clip set this package ships, played by <see cref="DefaultAnimationGraph"/>.</summary>
+	public const string DefaultAnimationClips = "data/skater/skater-corrected.sman";
+
+	/// <summary>The graph this package ships for <see cref="DefaultAnimationClips"/>.</summary>
+	public const string DefaultAnimationGraph = "data/skater/skater.graph.json";
 
 	/// <summary>Preferred clip style tag (for example a signature set); empty plays the standard motions.</summary>
 	[Property, Group( "Animation" )] public string AnimationStyle { get; set; } = "";

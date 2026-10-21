@@ -32,9 +32,9 @@ internal sealed class BoardRetrievalProfile
 	{
 		if ( string.IsNullOrWhiteSpace( path ) )
 			return null;
-		if ( !FileSystem.Data.FileExists( path ) )
+		if ( !RiderFiles.Exists( path ) )
 			throw new InvalidOperationException( $"Board retrieval profile is missing: {path}" );
-		return Json.Deserialize<BoardRetrievalProfile>( FileSystem.Data.ReadAllText( path ) )
+		return Json.Deserialize<BoardRetrievalProfile>( RiderFiles.ReadText( path ) )
 			?? throw new InvalidOperationException( "Board retrieval profile is empty." );
 	}
 
