@@ -12,5 +12,9 @@ public enum SkateGrind
 	/// <summary>Only the nose truck on the rail.</summary>
 	Nosegrind,
 	/// <summary>Deck across the rail between the trucks.</summary>
-	Boardslide
+	Boardslide,
+	/// <summary>The deck's end past the nose truck on the rail: noseslides and nosebluntslides.</summary>
+	Noseslide,
+	/// <summary>The deck's end past the tail truck on the rail: tailslides and bluntslides.</summary>
+	Tailslide
 }

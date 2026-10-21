@@ -7,4 +7,7 @@ using Vector3 = System.Numerics.Vector3;
 internal readonly record struct GrindLock( GrindKind Kind, Vector3 Direction, Vector3 Up, Vector3 Point = default )
 {
 	internal bool Active => Kind != GrindKind.None;
+
+	/// <summary>Direction across the rail toward the top of its ledge, or zero (see <see cref="RailSegment.Top"/>).</summary>
+	internal Vector3 Top { get; init; }
 }

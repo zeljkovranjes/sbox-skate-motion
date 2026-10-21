@@ -5,8 +5,9 @@ using Vector3 = System.Numerics.Vector3;
 /// <summary>
 /// Spin control in the air: the steering input sets a target spin rate about world up (strongest just after
 /// take-off, easing to under half within half a second), and toward the landing the board turns itself to line up
-/// with its direction of travel, forwards or backwards whichever is nearer. The deck's spin is moved toward that
-/// rate each step; pitch and roll are left to physics.
+/// with its direction of travel, forwards or backwards whichever is nearer. Coming down on a rail, a board turned
+/// nearer across the rail than along its travel lines up across the rail instead, so a turn in the air lands a
+/// slide. The deck's spin is moved toward that rate each step; pitch and roll are left to physics.
 /// </summary>
 internal sealed class AirControl
 {
@@ -23,8 +24,22 @@ internal sealed class AirControl
 	// Seconds over which the spin closes on its target rate.
 	private const float Response = 0.1f;
 
+	/// <summary>Turn off the line of travel, in radians, past which a board coming down on a rail lines up across it
+	/// for a slide instead of along it for a grind.</summary>
+	internal const float SlideTurn = 0.52f;
+
+	/// <summary>Seconds of its present turn rate a turning board is taken to carry on for, in choosing between a slide
+	/// and a grind.</summary>
+	internal const float TurnLookahead = 0.1f;
+
+	/// <summary>The heading (radians about world up) a board turning at <paramref name="spin"/> is taken to come down at,
+	/// from its <paramref name="heading"/> now.</summary>
+	internal static float LandingHeading( float heading, float spin ) => heading + spin * TurnLookahead;
+
 	/// <summary>Change of angular velocity (world, radians per second) to apply to the deck this step.</summary>
-	internal Vector3 Step( in BoardBody body, float steer, float gravity, float step, float alignRate = MaximumRate )
+	/// <param name="rail">Direction of the rail the board is coming down on, or null.</param>
+	internal Vector3 Step( in BoardBody body, float steer, float gravity, float step, float alignRate = MaximumRate,
+		Vector3? rail = null )
 	{
 		if ( !_airborne )
 		{
@@ -34,7 +49,7 @@ internal sealed class AirControl
 		}
 		_airTime += step;
 		var input = Math.Clamp( steer, -1f, 1f ) * SpinRate * InputShare( _airTime );
-		var align = Math.Clamp( Alignment( body, gravity ), -alignRate, alignRate );
+		var align = Math.Clamp( Alignment( body, gravity, rail ), -alignRate, alignRate );
 		var target = Math.Clamp( input + align, -MaximumRate, MaximumRate );
 		var current = body.AngularVelocity.Z;
 		return Vector3.UnitZ * ((target - current) * Math.Min( 1f, step / Response ));
@@ -46,8 +61,8 @@ internal sealed class AirControl
 	// Share of the full spin rate the input gives this long after take-off.
 	internal static float InputShare( float airTime ) => 1f - 0.58f * Math.Clamp( airTime / 0.5f, 0f, 1f );
 
-	// Spin that brings the deck in line with its travel by the time it lands.
-	private float Alignment( in BoardBody body, float gravity )
+	// Spin that brings the deck in line with its travel (or across the rail it comes down on) by the time it lands.
+	private float Alignment( in BoardBody body, float gravity, Vector3? rail )
 	{
 		var travel = new Vector3( body.Velocity.X, body.Velocity.Y, 0f );
 		var forward = new Vector3( body.Forward.X, body.Forward.Y, 0f );
@@ -59,6 +74,20 @@ internal sealed class AirControl
 		// Riding backwards is as good a landing as forwards.
 		if ( MathF.Abs( error ) > MathF.PI / 2f )
 			error = Wrap( error - MathF.PI );
+		if ( rail is { } along && new Vector3( along.X, along.Y, 0f ).LengthSquared() > 0.01f )
+		{
+			// Turned well off its travel (as it is turning, a moment on), either way across the rail, whichever is nearer.
+			var turned = Wrap( wanted - LandingHeading( heading, body.AngularVelocity.Z ) );
+			if ( MathF.Abs( turned ) > MathF.PI / 2f )
+				turned = Wrap( turned - MathF.PI );
+			if ( MathF.Abs( turned ) > SlideTurn )
+			{
+				// Measured from where its turn is carrying it, so a fast turn into the slide does not swing on past it.
+				error = Wrap( MathF.Atan2( along.Y, along.X ) + MathF.PI / 2f - LandingHeading( heading, body.AngularVelocity.Z ) );
+				if ( MathF.Abs( error ) > MathF.PI / 2f )
+					error = Wrap( error - MathF.PI );
+			}
+		}
 		var vertical = body.Velocity.Z;
 		var drop = body.Position.Z - _takeoffHeight;
 		var landing = gravity > 0f ? (vertical + MathF.Sqrt( MathF.Max( vertical * vertical + 2f * gravity * drop, 0f ) )) / gravity : 1f;

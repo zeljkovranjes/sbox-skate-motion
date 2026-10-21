@@ -32,5 +32,11 @@ public enum SkateTrick
 	/// <summary>Full horizontal spin.</summary>
 	Shuvit360,
 	/// <summary>Full frontside horizontal spin.</summary>
-	FrontsideShuvit360
+	FrontsideShuvit360,
+	/// <summary>Kickflip with a full frontside spin.</summary>
+	Hardflip360,
+	/// <summary>Heelflip with a full backside spin.</summary>
+	InwardHeelflip360,
+	/// <summary>A foot planted off a ground grab springing the board up: a boneless or fastplant.</summary>
+	Plant
 }

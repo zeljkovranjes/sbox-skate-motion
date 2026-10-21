@@ -5,12 +5,23 @@ namespace SkateMotion.Engine;
 
 internal static class LocalControllerInput
 {
+	/// <summary>True while a connected controller is the last device used: for prompts and glyphs only. The rider reads
+	/// both devices every frame and merges them (DeviceInputMerge), since a drifting stick or a resting trigger keeps
+	/// the engine's flag on a controller while keys are held.</summary>
+	internal static bool InUse => Input.UsingController && Input.ControllerCount > 0;
+
+	/// <summary>
+	/// The first controller's sticks, triggers and buttons as it reports them, read in its own input scope so whatever
+	/// device the engine counts as last; nothing without a controller.
+	/// </summary>
 	internal static ControllerReading Read()
 	{
-		if ( !Input.UsingController || Input.Suppressed || Input.ControllerCount == 0 )
+		if ( Input.Suppressed || Input.ControllerCount == 0 )
 		{
 			return default;
 		}
+
+		using var scope = Input.PlayerScope( Input.PlayerIndex.Controller1 );
 
 		var buttons = ControllerButtons.None;
 		Add( ref buttons, ControllerButtons.LeftStick, "SkatePadLeftStick" );

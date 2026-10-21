@@ -74,8 +74,10 @@ internal sealed class ArticulatedContacts
 		_mesh.Clear();
 	}
 
+	/// <param name="railSlide">The deck slides across a rail: the board's own collision with rails is left to the rail
+	/// contact.</param>
 	internal ReadOnlySpan<CollisionContact> Sample( ArticulatedBoard assembly, float step, bool slide,
-		ReadOnlySpan<RailSegment> rails )
+		ReadOnlySpan<RailSegment> rails, bool railSlide = false )
 	{
 		_count = 0;
 		_surfaceCount = 0;
@@ -109,7 +111,7 @@ internal sealed class ArticulatedContacts
 					Add( assembly, wheel, body.Position - SkateUnits.ToCore( terrain.Normal ) * _radius, terrain, slide );
 			}
 			if ( !trace.Hit || trace.StartedSolid || MeshFaces.IsBackFace( _deck.Scene, trace, _deck.GameObject )
-				|| !_mesh.Refine( ref trace, start, end, _radius ) )
+				|| railSlide && trace.HasTag( SkateTags.Grind ) || !_mesh.Refine( ref trace, start, end, _radius ) )
 				continue;
 			var normal = SkateUnits.ToCore( trace.Normal );
 			// A lifted support probe can cross a thin mesh from its back side. Only use
@@ -123,10 +125,18 @@ internal sealed class ArticulatedContacts
 			Add( assembly, wheel, body.Position - normal * _radius, trace, slide );
 		}
 		foreach ( var hit in _manifold.Sample( assembly.Deck, assembly.Body( 0 ).Acceleration, step, _recover ) )
-			Add( assembly, 0, SkateUnits.Metres( hit.Point ), hit.Trace, slide );
-		if ( _manifold.HasDynamicObstruction )
-			foreach ( var hit in _staticManifold.Sample( assembly.Deck, assembly.Body( 0 ).Acceleration, step, _recover ) )
+		{
+			if ( !(railSlide && hit.Trace.HasTag( SkateTags.Grind )) )
 				Add( assembly, 0, SkateUnits.Metres( hit.Point ), hit.Trace, slide );
+		}
+		if ( _manifold.HasDynamicObstruction )
+		{
+			foreach ( var hit in _staticManifold.Sample( assembly.Deck, assembly.Body( 0 ).Acceleration, step, _recover ) )
+			{
+				if ( !(railSlide && hit.Trace.HasTag( SkateTags.Grind )) )
+					Add( assembly, 0, SkateUnits.Metres( hit.Point ), hit.Trace, slide );
+			}
+		}
 		Grind = rails.IsEmpty ? default
 			: RailContacts.Build( assembly, rails, GetSurface( assembly, null ), _settings.GrindFriction * GrindFrictionScale, _contacts, ref _count );
 		for ( var i = 0; i < 4; i++ )

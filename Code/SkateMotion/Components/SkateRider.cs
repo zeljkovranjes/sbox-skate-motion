@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Sandbox;
 using SkateMotion.Core.Animation;
+using SkateMotion.Core.Input;
 using SkateMotion.Core.Vehicle;
 using SkateMotion.Engine;
 using SkateMotion.Systems;
@@ -50,6 +51,12 @@ public sealed class SkateRider : Component
 	/// <summary>Name of the clip playing now, or null when the built-in animation is used.</summary>
 	public string AnimationMotion => _animator?.ClipMotion;
 
+	/// <summary>
+	/// The board-handling motion playing over the body (FrontInto, FrontCycle, FrontOut, BackInto, BackCycle, BackOut, Drop
+	/// or Throw), or null when none plays.
+	/// </summary>
+	public string AnimationOverlay => _animator?.HandlingMotion;
+
 	/// <summary>True while the rider rides switch: the other foot forward, the board's tail leading.</summary>
 	public bool RidingSwitch => _animator?.Switch ?? false;
 
@@ -58,6 +65,25 @@ public sealed class SkateRider : Component
 	/// deck; null: no foot over it). For checking foot placement on custom riders and boards.
 	/// </summary>
 	public float? FootDeckGap => _animator?.FootDeckGap;
+
+	/// <summary>
+	/// Gap in inches between the left foot's sole and the board's deck this frame, on the side of the deck it stands on
+	/// (negative: inside the deck; null: not over it, not riding, or let go of the board by the animation). For checking that
+	/// each foot stands on the deck.
+	/// </summary>
+	public float? LeftSoleDeckGap => _animator?.SoleDeckGaps?[ 0 ];
+
+	/// <summary>As <see cref="LeftSoleDeckGap"/>, for the right foot.</summary>
+	public float? RightSoleDeckGap => _animator?.SoleDeckGaps?[ 1 ];
+
+	/// <summary>
+	/// How high (inches) the animation's clip holds the left ball of the foot over its own board this frame (null: not
+	/// riding). Higher than it stands, the clip is lifting that foot (stepping it, an ollie's).
+	/// </summary>
+	public float? LeftClipToeHeight => _animator?.ClipToeHeights?[ 0 ];
+
+	/// <summary>As <see cref="LeftClipToeHeight"/>, for the right foot.</summary>
+	public float? RightClipToeHeight => _animator?.ClipToeHeights?[ 1 ];
 
 	/// <summary>
 	/// Gap (inches) between the hand holding the board, measured from the rider's mesh, and the deck as shown; negative
@@ -101,7 +127,7 @@ public sealed class SkateRider : Component
 	private RiderMotor _motor;
 	private RiderAnimator _animator;
 	private RiderInteraction _interaction;
-	private bool _mountAfterDrop;
+	private readonly Core.Physics.HeldBoardMotion _held = new();
 	private readonly LocalSkateInput _input = new();
 	private readonly HippyJump _hippyJump = new();
 	private RiderControllerInput _controller;
@@ -110,31 +136,84 @@ public sealed class SkateRider : Component
 	private int _gesture;
 	internal GameObject VisualObject => _animator?.Visual;
 
-	/// <summary>Starts a visible step onto a reachable board, placing a carried board down first.</summary>
+	// Where the rider is shown this frame, smoothed between fixed steps; the camera follows it on foot and in a bail.
+	internal Transform ShownTransform => _animator?.Smoother.At( WorldTransform, Time.Now ) ?? WorldTransform;
+
+	/// <summary>
+	/// Starts a visible step onto a reachable board. With the board in hand the rider puts it down under its feet and gets
+	/// on as it goes, walking, running or sprinting onto it, or in the air under its feet before it lands.
+	/// </summary>
 	public bool RequestMount()
 	{
-		if ( Mode == SkateRiderMode.Carrying )
-		{
-			if ( !RequestDrop() ) return false;
-			_mountAfterDrop = true;
+		// Standing at the lip of a ramp with the board in hand, the rider drops in instead: it steps up to the lip, sets the
+		// board's tail on it and waits there while the mount control is held, going over as it is let go.
+		if ( Mode == SkateRiderMode.Carrying && _motor.Velocity.WithZ( 0f ).Length < DropInStill
+			&& BeginInteraction( RiderAction.DropIn ) )
 			return true;
-		}
-		return BeginInteraction( RiderAction.Mount );
+		if ( Mode == SkateRiderMode.Carrying )
+			return BeginInteraction( RiderAction.Mount );
+		if ( !BeginInteraction( RiderAction.Mount ) ) return false;
+		// A board left upside down (a dark landing run out, a dark bail) is turned back over as the rider steps on.
+		Board.TurnUpright();
+		return true;
 	}
 
 	/// <summary>Starts a collision-constrained step off the board.</summary>
-	public bool RequestDismount()
+	public bool RequestDismount() => BeginDismount( false );
+
+	// Whether the step off under way is the board's own runout rather than the rider getting off.
+	private bool _runout;
+
+	private bool BeginDismount( bool runout )
 	{
-		if ( !BeginInteraction( RiderAction.Dismount ) ) return false;
+		if ( IsProxy ) return false;
+		// Getting off can move the rider (up to a hippy jump's flight, out of a wall it rode along) after its model was
+		// placed for this frame: the model stays where it is shown and follows from the next frame.
+		var shown = _animator.Visual.WorldTransform;
+		// Off the deck in a hippy jump the body is up above the board: it steps off from there, still rising or falling,
+		// and is shown from there rather than easing up from the board.
+		var flying = _hippyJump.Flying;
+		var rising = _hippyJump.VerticalSpeed * SkateUnits.InchesPerMetre;
+		// Let go of in a grab in the air, the hands already hold the board: the rider takes it along.
+		var grabbing = !runout && Board.State.IsAirborne && Board.CurrentInput.Grab != SkateAirGrab.None;
+		if ( flying )
+		{
+			var flight = SkateUnits.Inches( _hippyJump.Offset );
+			WorldPosition += flight;
+			_animator.Smoother.Shift( flight );
+		}
+		var stepping = BeginInteraction( RiderAction.Dismount );
+		_animator.Visual.WorldTransform = shown;
+		if ( !stepping ) return false;
+		// Riding, the rider's steps were recorded where following the board put it each frame; on foot they are its own
+		// physics steps. It goes on from the board's, so its shown place does not jump by the difference a step later.
+		Board.HandStepsTo( _animator.Smoother, WorldTransform );
+		if ( flying ) _motor.Rise( rising );
+		_runout = runout;
+		_hippyJump.Clear();
 		Board.SetRiderAttached( false );
+		if ( grabbing && _motor.TakeBoard() )
+		{
+			Board.Enabled = false;
+			_motor.KeepPlace();
+		}
 		return true;
 	}
 
 	/// <summary>Reaches for a nearby board before lifting it into the carrying pose.</summary>
-	public bool RequestPickUp() => BeginInteraction( RiderAction.PickUp );
+	public bool RequestPickUp()
+	{
+		if ( !BeginInteraction( RiderAction.PickUp ) ) return false;
+		// A board left upside down is turned back over as the rider reaches for it, so the hand takes it the right way up.
+		Board.TurnUpright();
+		return true;
+	}
 
-	/// <summary>Moves the held board into release position before resuming its physical simulation.</summary>
+	/// <summary>Lets the held board drop beside the rider as the hand lets go of it.</summary>
 	public bool RequestDrop() => BeginInteraction( RiderAction.Drop );
+
+	/// <summary>Tosses the held board down ahead of the rider, letting go of it as the throw's swing does.</summary>
+	public bool RequestThrow() => BeginInteraction( RiderAction.Throw );
 
 	private bool BeginInteraction( RiderAction action )
 	{
@@ -151,9 +230,9 @@ public sealed class SkateRider : Component
 		_interaction.Step( delta );
 		if ( _interaction.CaptureBoard )
 		{
+			// The board is called to the hand: it leaves the world's simulation and flies in, held once it arrives.
 			Board.Enabled = false;
-			var captured = _interaction.UsesSourcePickup ? _motor.BeginRetrieval() : _motor.PickUp( false );
-			if ( !captured )
+			if ( !_motor.BeginRetrieval() )
 			{
 				Board.Enabled = true;
 				_interaction.End();
@@ -164,21 +243,97 @@ public sealed class SkateRider : Component
 		}
 		if ( !_interaction.Finished ) return;
 		var action = _interaction.Action;
+		var fromHand = _interaction.MountsFromHand;
 		var reached = _interaction.AtDestination;
-		if ( reached && _interaction.UsesSourcePickup )
+		if ( reached && action == RiderAction.PickUp )
 			_motor.CompleteRetrieval();
+		_mountSpent |= action == RiderAction.DropIn && !reached && _mountHeld;
 		_interaction.End();
-		LastInteractionSucceeded = reached && (action switch
+		LastInteractionSucceeded = reached && (action != RiderAction.Mount || fromHand || Mount());
+	}
+
+	// Slower than this (inches per second) the rider counts as standing for a drop-in; seconds after dropping in that the
+	// board still goes over the lip (the clips' drop-in ride).
+	private const float DropInStill = 40f;
+	private const float DroppingIn = 0.4f;
+	private float _droppedIn = float.NegativeInfinity;
+
+	// Whether the mount control is held (letting it go at a lip drops in), and whether a drop-in was backed out of with it
+	// still held: until it is let go it starts nothing more, so the rider does not step straight back up to the lip.
+	private bool _mountHeld;
+	private bool _mountSpent;
+
+	// How fast (degrees per second) the rider turns toward a board it reaches for on a side no reach covers, and how
+	// quickly (degrees per second squared) it takes that turn up and lets it go, so the body neither starts nor stops
+	// turning at full speed in a frame.
+	private const float ReachTurnRate = 360f;
+	private const float ReachTurnSpeedUp = 1440f;
+	private readonly Core.Vehicle.EasedTurn _reachTurn = new( ReachTurnRate, ReachTurnSpeedUp );
+
+	// Each frame while the hands handle the board: a held board follows the hand; a drop or throw lets go of it as the
+	// animation's hand does (or once it has gone on long enough without one), moving as the hand moved it; a mount from the
+	// hand puts it down under the rider once the hand has brought it to the ground, or in the air as the air mount ends.
+	private void HandleBoard()
+	{
+		var shown = _animator.CarriedBoardPose;
+		var holding = _interaction.CarriesBoard;
+		if ( holding && _interaction.Action is RiderAction.Drop or RiderAction.Throw && shown is { } hand )
+			_held.Add( SkateUnits.ToCore( hand.Position ), SkateUnits.ToCore( hand.Rotation ), Time.Delta );
+		else if ( !holding )
+			_held.Reset();
+		if ( !holding || IsProxy ) return;
+		var pose = shown ?? Board.WorldTransform;
+		if ( _interaction.Action is RiderAction.Drop or RiderAction.Throw )
 		{
-			RiderAction.Mount => Mount(),
-			RiderAction.Drop => Drop(),
-			_ => true
-		});
-		if ( _mountAfterDrop )
-		{
-			_mountAfterDrop = false;
-			if ( LastInteractionSucceeded ) RequestMount();
+			if ( !_animator.BoardReleased && !_interaction.ReleaseDue ) return;
+			var moving = shown is not null && _held.Velocity != System.Numerics.Vector3.Zero;
+			if ( _interaction.Release( pose, moving ? SkateUnits.ToEngine( _held.Velocity ) : null,
+				moving ? SkateUnits.ToEngine( _held.Spin ) : null ) )
+				Board.Enabled = true;
+			_held.Reset();
 		}
+	}
+
+	// Getting on from the hand or dropping in: once the hand has brought the board down, it goes under the rider and the
+	// rider gets on it. Done before the frame's animation, where the hand held the board the frame before: the rider moves
+	// onto the board here, and moved after the animation it carried the body it had just placed along for a frame.
+	private void PutBoardDown()
+	{
+		if ( !IsInteracting || IsProxy || !_interaction.CarriesBoard ) return;
+		var pose = _animator.CarriedBoardPose ?? Board.WorldTransform;
+		var rideHeight = Board.Dimensions.RideHeight * SkateUnits.InchesPerMetre;
+		if ( _interaction.DropsIn )
+		{
+			if ( !_interaction.PlaceDropIn( pose, rideHeight ) ) return;
+			Board.Enabled = true;
+			// The board the clip has tipped over the lip goes on from there to where it went down on the slope.
+			Board.ShowPutDown( _animator.Smoother, pose );
+			Board.SetRiderAttached( true );
+			_droppedIn = Time.Now;
+			return;
+		}
+		if ( !_interaction.MountsFromHand ) return;
+		// On the ground the board goes down as the mount's clip has the rider on it (the graph has gone on to riding: the
+		// clip's own moment, where its board is under its feet), or at the latest when the mount has run its time.
+		var onBoard = _animator.ClipState?.StartsWith( "OnBoard" ) == true;
+		var down = _interaction.MountsInAir ? _interaction.MountDue : _interaction.MountDue || onBoard;
+		if ( !down || !_interaction.PlaceAndMount( pose, rideHeight ) ) return;
+		Board.Enabled = true;
+		Board.ShowPutDown( _animator.Smoother );
+		Board.SetRiderAttached( true );
+	}
+
+	// Reaching for a board on the side no reach covers, the rider turns toward it; true while it does.
+	private bool TurnToReach( float delta )
+	{
+		if ( _interaction.Action != RiderAction.PickUp || Mode != SkateRiderMode.Walking )
+		{
+			_reachTurn.Reset();
+			return false;
+		}
+		var turn = _animator.ReachTurn;
+		_motor.Turn( _reachTurn.Step( turn, delta ) );
+		return turn != 0f || _reachTurn.Rate != 0f;
 	}
 
 	/// <summary>Supplies world-space walking direction, a one-shot jump request, and whether to sprint while running.</summary>
@@ -224,6 +379,7 @@ public sealed class SkateRider : Component
 		if ( IsProxy || _motor is null ) return false;
 		if ( Mode == SkateRiderMode.Carrying && !Drop() ) return false;
 		if ( !_motor.Mount() ) return false;
+		Board.TurnUpright();
 		Board.SetRiderAttached( true );
 		Board.ResetSimulation();
 		return true;
@@ -286,20 +442,50 @@ public sealed class SkateRider : Component
 		if ( outcome != HippyJump.Outcome.Missed ) return;
 		// The board went out from under the jump: the rider comes down where it is and runs it out.
 		WorldPosition += SkateUnits.Inches( offset ).WithZ( 0f );
-		RequestDismount();
+		BeginDismount( true );
 	}
 
 	// Running into something side-on while upright: step off and run it out.
 	private void OnRunout()
 	{
 		if ( IsProxy || Mode != SkateRiderMode.Riding ) return;
-		RequestDismount();
+		BeginDismount( true );
 	}
 
-	// Deck impacts that do not bail knock the rider; the clip graph plays a short bump.
+	// Deck impacts that do not bail knock the rider; the clip graph plays a short bump. The deck meeting a rail as the board
+	// comes down onto it is the slide itself, and a board held dark side up rides on its deck: neither is a knock, and an
+	// impact waits KnockWait to see whether the board locks onto a rail before it counts.
 	private void OnBoardCollided( float speed )
 	{
 		if ( speed < 1f || Mode != SkateRiderMode.Riding || Board.State.IsBailed ) return;
+		if ( Board.State.Grind != SkateGrind.None || Board.DarkSideUp || Time.Now - _grinded < AfterGrind )
+		{
+			_knock = null;
+			return;
+		}
+		_knock ??= Time.Now;
+	}
+
+	// When the board last rode a rail: leaving one, the deck or a truck catching the rail's end or edge is the board
+	// coming off it, not a knock.
+	private float _grinded = float.NegativeInfinity;
+
+	// Seconds after a grind ends that an impact is still the board coming off the rail.
+	private const float AfterGrind = 0.4f;
+
+	private float? _knock;
+
+	// Seconds a deck impact waits for the board to lock onto a rail before it knocks the rider.
+	private const float KnockWait = 0.06f;
+
+	private void Knock()
+	{
+		if ( Board.State.Grind != SkateGrind.None )
+			_grinded = Time.Now;
+		if ( _knock is not { } knocked || Time.Now - knocked < KnockWait ) return;
+		_knock = null;
+		if ( Mode != SkateRiderMode.Riding || Board.State.IsBailed || Board.State.Grind != SkateGrind.None || Board.DarkSideUp
+			|| knocked - _grinded < AfterGrind ) return;
 		PlayAnimation( new Dictionary<string, string> { [ "family" ] = "bump", [ "action" ] = "frontknock", [ "phase" ] = "once" }, 0.45f );
 	}
 
@@ -324,16 +510,18 @@ public sealed class SkateRider : Component
 		Board.Bailed -= OnBoardBailed;
 		Board.Collided -= OnBoardCollided;
 		Board.RunoutRequested -= OnRunout;
-		Board.TrickStarted -= _animator.OnTrick;
+		Board.TrickStarted -= OnBoardTrick;
 		Board.Landed -= _animator.OnLanded;
 	}
+
+	private void OnBoardTrick( SkateTrick trick ) => _animator.OnTrick( trick, Board.LastTrickFromNose );
 
 	private void Subscribe()
 	{
 		Board.Bailed += OnBoardBailed;
 		Board.Collided += OnBoardCollided;
 		Board.RunoutRequested += OnRunout;
-		Board.TrickStarted += _animator.OnTrick;
+		Board.TrickStarted += OnBoardTrick;
 		Board.Landed += _animator.OnLanded;
 	}
 
@@ -362,42 +550,104 @@ public sealed class SkateRider : Component
 		if ( _motor is null || !Board.IsValid() ) return;
 		if ( Board.State.IsBailed && Mode == SkateRiderMode.Riding ) OnBoardBailed();
 		if ( Mode == SkateRiderMode.Bailed ) _motor.FollowRagdoll( _animator.Ragdoll.Position );
+		PutBoardDown();
 		_motor.FollowBoard();
+		// On foot the animation is told whether the rider stands or is in the air (a jump, a fall, a step off up high).
+		if ( Mode is SkateRiderMode.Walking or SkateRiderMode.Carrying )
+			_animator.SetFooting( !_motor.Airborne, _motor.Velocity.z / SkateUnits.InchesPerMetre );
+		Knock();
+		_animator.PlantLip = Board.HandPlantLip;
+		// Dropping in, the board the clips set down at the lip lies where they have it against where the rider stands there.
+		_animator.BoardRestFrame = IsInteracting ? _interaction.DropInStand : null;
 		if ( !_animator.UpdateClips( Activity(), Board.State, Board.CurrentInput, _motor.Velocity, Goofy, AnimationStyle, Time.Delta,
-			moveAmount: _walk.WithZ( 0f ).Length, holdingBoard: Mode == SkateRiderMode.Carrying, hippy: _hippyJump ) )
+			// Backing out of a drop-in is the stick pulled back from the lip, as the graph's step back reads it.
+			moveAmount: _interaction.BacksOut ? -1f : _walk.WithZ( 0f ).Length, holdingBoard: Mode == SkateRiderMode.Carrying,
+			hippy: _hippyJump,
+			runout: _runout && IsInteracting, groundSlope: _motor.GroundSlope, edgeDistance: _motor.EdgeDistance,
+			mountHeld: _mountHeld, droppingIn: Mode == SkateRiderMode.Riding && Time.Now - _droppedIn < DroppingIn ) )
 		{
 			_animator.Update( Mode, Board.State, _motor.Velocity, _motor.Grounded, Goofy );
 			if ( IsInteracting ) _animator.UpdateInteraction( _interaction, Goofy );
 		}
-		_motor.UpdateCarryPose( _animator.CarriedBoardPose, !IsInteracting );
+		// Down on the ground dark side up the board cannot be ridden on its grip: as the graph's dark ground state has it, the
+		// rider steps off and runs it out, leaving the board upside down.
+		if ( !IsProxy && Mode == SkateRiderMode.Riding && !IsInteracting && _animator.DarkOnGround && !Board.State.IsBailed )
+			BeginDismount( true );
+		_motor.UpdateCarryPose( _animator.CarriedBoardPose, !IsInteracting || _interaction.CarriesBoard );
+		if ( IsInteracting ) HandleBoard();
+		else _held.Reset();
 		if ( IsInteracting && !IsProxy ) _interaction.ShowPickup();
 		CheckHeadFirst();
 		Board.PushContact = Mode == SkateRiderMode.Riding ? _animator.PushContact : null;
-		_interaction.ObserveRetrievalRequest( _animator.RetrieveRequested );
+		Board.DarkSideUp = Mode == SkateRiderMode.Riding && _animator.DarkSideUp;
+		_interaction.ObserveRetrievalRequest( _animator.RetrieveRequested, _animator.HandlingMotion is not null );
+		// A landing played inside an interaction (getting off in the air) carries the walker as its clip carries the body.
+		_interaction.LandingTravel = _animator.LandingTravel;
+		// The drop-in's clips (stepping up to the lip, going over it) set the pace of its steps.
+		var droppingIn = _animator.ClipState?.Contains( "DropIn" ) == true;
+		_interaction.ObserveTravel( droppingIn ? _animator.ClipTravel : null, droppingIn ? _animator.ClipTravelOffset : null );
 		if ( IsProxy || !ReadLocalInput ) return;
+		// The keyboard and mouse and the first controller are read every frame and merged control by control
+		// (DeviceInputMerge), so a drifting stick or a resting trigger never locks out held keys, nor keys a controller.
+		var raw = LocalControllerInput.Read();
+		var pad = DeviceInputMerge.Settle( raw );
+		var move = DeviceMerge.KeyboardMove( raw );
 		// Sample through interactions too, so held controls do not become fresh edges afterward.
-		_controller?.Update( Mode, Board.State, IsInteracting, Goofy, WorldRotation.Forward, Time.Delta );
-		if ( Input.UsingController )
+		_controller?.Update( Mode, Board.State, IsInteracting, Goofy, WorldRotation.Forward, Time.Delta, pad );
+		var keys = RiderKeys.Read( keyboardOnly: _controller is not null );
+		_mountHeld = keys.MountHeld || _controller?.ToggleHeld == true;
+		if ( IsInteracting )
 		{
-			ApplyController();
+			// At the lip of a drop-in the mount control is held to wait and let go to go over; the stick pulled back backs out.
+			_interaction.ObserveMountHeld( _mountHeld );
+			if ( _interaction.DropsIn )
+				_interaction.ObserveWalking( WalkingInput( pad, move ) );
+			// Picking the board up, dropping or throwing it, only the hands are busy: the rider keeps walking.
+			if ( _interaction.AllowsWalking )
+				SetWalkInput( WalkingInput( pad, move ), false, keys.Sprint || _controller?.Sprint == true );
 			return;
 		}
-		if ( IsInteracting ) return;
-		if ( Mode == SkateRiderMode.Riding && Input.Pressed( "SkateBail" ) ) Board.Bail();
-		if ( Mode == SkateRiderMode.Riding && Input.Pressed( "SkateGesture" ) ) NextGesture();
-		if ( Input.Pressed( "SkateMount" ) )
+		if ( Mode == SkateRiderMode.Riding && (keys.Bail || _controller?.Bail == true) ) Board.Bail();
+		if ( Mode == SkateRiderMode.Riding && keys.Gesture ) NextGesture();
+		var toggle = Mode == SkateRiderMode.Bailed ? _controller?.Recover == true : _controller?.Toggle == true;
+		_mountSpent &= _mountHeld;
+		if ( (keys.Mount || toggle) && !_mountSpent )
 		{
 			if ( Mode == SkateRiderMode.Bailed ) Recover();
 			else if ( Mode == SkateRiderMode.Riding ) RequestDismount();
 			else RequestMount();
 		}
-		if ( Input.Pressed( "SkatePickup" ) )
+		// The pickup key drops a held board or calls the board back to the hand; the throw key tosses a held board down
+		// ahead (calling it back when it is not held). On a controller, as the triggers do: the left one drops, the right
+		// one throws, either calls the board back.
+		var throwing = keys.Throw || _controller?.Throw == true;
+		if ( keys.Pickup )
 		{
 			if ( Mode == SkateRiderMode.Carrying ) RequestDrop();
 			else RequestPickUp();
 		}
-		if ( Mode == SkateRiderMode.Riding ) Board.SetInput( WhileJumping( _input.Read( Goofy, Time.Delta ) ) );
-		else if ( Mode != SkateRiderMode.Bailed ) SetWalkInput( ViewRelative( Input.AnalogMove ), Input.Pressed( "Jump" ), Input.Down( "SkateSprint" ) );
+		else if ( Mode == SkateRiderMode.Carrying && throwing ) RequestThrow();
+		else if ( Mode == SkateRiderMode.Carrying && _controller?.Drop == true ) RequestDrop();
+		else if ( Mode == SkateRiderMode.Walking && (keys.Throw || _controller?.Retrieve == true) ) RequestPickUp();
+		if ( Mode == SkateRiderMode.Riding ) Board.SetInput( WhileJumping( RidingInput( pad, move ) ) );
+		else if ( Mode != SkateRiderMode.Bailed )
+			SetWalkInput( WalkingInput( pad, move ), keys.Jump || _controller?.Jump == true, keys.Sprint || _controller?.Sprint == true );
+	}
+
+	// Board input from the keys and the controller (through its profile when there is one), merged.
+	private SkateInput RidingInput( ControllerReading pad, Vector3 move )
+	{
+		var keys = _input.ReadKeys( Goofy, Time.Delta, move );
+		var controller = _controller?.BoardInput( Goofy ) ?? LocalSkateInput.Pad( pad, Goofy );
+		return DeviceMerge.Board( keys, DeviceMerge.SteeringKey( move ), controller, DeviceInputMerge.Activity( pad ) );
+	}
+
+	// Walking from the movement keys (relative to the view) or the left stick, whichever is in use.
+	private Vector3 WalkingInput( ControllerReading pad, Vector3 move )
+	{
+		var controller = _controller?.Walking ?? ViewRelative( new Vector3( pad.LeftY, -pad.LeftX, 0f ) );
+		return SkateUnits.ToEngine( DeviceInputMerge.Walk( SkateUnits.ToCore( ViewRelative( move ) ),
+			DeviceMerge.MovementKey( move ), SkateUnits.ToCore( controller ), DeviceInputMerge.Activity( pad ) ) );
 	}
 
 	// Movement keys walk relative to where the scene camera looks (forward is away from the camera), not the world.
@@ -407,46 +657,19 @@ public sealed class SkateRider : Component
 		return camera.IsValid() ? Rotation.FromYaw( camera.WorldRotation.Yaw() ) * move : WorldRotation * move;
 	}
 
-	private void ApplyController()
-	{
-		if ( _controller is null )
-		{
-			Board.SetInput( default );
-			SetWalkInput( Vector3.Zero );
-			return;
-		}
-		if ( IsInteracting )
-		{
-			Board.SetInput( default );
-			return;
-		}
-		if ( Mode == SkateRiderMode.Bailed )
-		{
-			if ( _controller.Recover ) Recover();
-			return;
-		}
-		if ( Mode == SkateRiderMode.Riding )
-		{
-			Board.SetInput( WhileJumping( _controller.BoardInput( Goofy ) ) );
-			if ( _controller.Bail ) Board.Bail();
-			else if ( _controller.Toggle ) RequestDismount();
-			return;
-		}
-		SetWalkInput( _controller.Walking, _controller.Jump, _controller.Sprint );
-		if ( _controller.Toggle ) RequestMount();
-		else if ( Mode == SkateRiderMode.Carrying && _controller.Drop ) RequestDrop();
-		else if ( Mode == SkateRiderMode.Walking && _controller.Retrieve ) RequestPickUp();
-	}
-
 	private RiderActivity Activity()
 	{
 		if ( IsInteracting )
 		{
 			return _interaction.Action switch
 			{
-				RiderAction.Mount => RiderActivity.Mounting,
+				// Once a mount from the hand or a drop-in has put the board down and the rider on it, it rides (the board goes
+				// down as the clip has its board under the feet): shown as getting on, the body would be placed from the
+				// rider's new place on the board without the deck's offset.
+				RiderAction.Mount or RiderAction.DropIn => Mode == SkateRiderMode.Riding ? RiderActivity.Riding : RiderActivity.Mounting,
 				RiderAction.Dismount => RiderActivity.Dismounting,
 				RiderAction.PickUp => RiderActivity.PickingUp,
+				RiderAction.Throw => RiderActivity.Throwing,
 				_ => RiderActivity.Dropping
 			};
 		}
@@ -467,15 +690,21 @@ public sealed class SkateRider : Component
 		if ( Mode == SkateRiderMode.Riding && !IsInteracting )
 			StepHippyJump( Time.Delta );
 		else
-			_hippyJump.Reset();
+			_hippyJump.Clear();
 		if ( IsInteracting )
+		{
 			StepInteraction( Time.Delta );
+			if ( IsInteracting && _interaction.AllowsWalking )
+				_motor.Walk( _walk, false, Time.Delta, _sprinting, turn: !TurnToReach( Time.Delta ),
+					travel: _animator.LandingTravel );
+		}
 		else
 		{
-			_motor.Walk( _walk, _jump, Time.Delta, _sprinting );
+			// A landing goes on as its clip carries the body, over the feet it plants.
+			_motor.Walk( _walk, _jump, Time.Delta, _sprinting, travel: _jump ? null : _animator.LandingTravel );
 			_jump = false;
 		}
-		_animator.Smoother.Record( WorldTransform, Time.Now, Time.Delta );
+		_animator.Smoother.Record( _motor.ShownTransform( Time.Delta ), Time.Now, Time.Delta );
 	}
 
 	protected override void OnDestroy() => _animator?.Destroy();

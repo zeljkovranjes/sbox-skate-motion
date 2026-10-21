@@ -9,7 +9,8 @@ using Matrix4x4 = System.Numerics.Matrix4x4;
 
 /// <summary>
 /// Finds the humanoid bones of an arbitrary skeleton: hips, spine chain, neck, head, and per side the shoulder,
-/// arm, forearm, hand, thigh, shin, foot and toe. Names are matched against common rig conventions after
+/// arm, forearm, hand, thigh, shin, foot and toe, and each hand's fingers (thumb, index, middle, ring and pinky, each
+/// with an optional base bone and up to three joints). Names are matched against common rig conventions after
 /// stripping prefixes and separators; side comes from the name or, failing that, from rest geometry; roles a
 /// name does not reveal are recovered from the hierarchy (the limb chains between hips, chest and the ends).
 /// Also measures the rig's facing so models built facing any direction retarget correctly.
@@ -20,6 +21,27 @@ internal sealed class HumanoidBones
 	internal static readonly string[] Spine = { "spine", "spine1", "spine2", "spine3" };
 
 	private static readonly string[] Limbs = { "shoulder", "arm", "forearm", "hand", "upleg", "leg", "foot", "toe" };
+
+	/// <summary>Finger role names, in the order fingers lie across a hand from the thumb.</summary>
+	internal static readonly string[] Fingers = { "thumb", "index", "middle", "ring", "pinky" };
+
+	// Words naming each finger, in the order of Fingers.
+	private static readonly string[][] FingerWords =
+	{
+		new[] { "thumb", "pollex" }, new[] { "index", "pointer" }, new[] { "middle", "mid" }, new[] { "ring" },
+		new[] { "pinky", "pinkie", "little", "small" }
+	};
+
+	// Words that mark a finger's base (metacarpal) bone, and the end markers that close a finger without a role.
+	private static readonly string[] FingerBase = { "meta", "metacarpal", "carpal", "palm", "base" };
+	private static readonly string[] EndMarkers = { "end", "nub", "tip" };
+
+	// Helper words that belong to a hand's fingers rather than to something else hanging from the hand.
+	private static readonly string[] FingerHelpers = { "finger", "thumb", "index", "middle", "ring", "pinky", "little", "carpal",
+		"meta", "end", "nub", "tip" };
+
+	// A first bone starting this close to the wrist (share of the finger's reach) ahead of three more is its base.
+	private const float BaseReach = 0.35f;
 
 	// Words that mark helper bones (twist, roll, IK targets, end markers, corrective, fingers) which never take a role.
 	private static readonly string[] Helpers =
@@ -57,6 +79,7 @@ internal sealed class HumanoidBones
 		FindHips( roles );
 		FindLegs( roles, sides );
 		FindTorso( roles, sides );
+		FindFingers();
 		Facing = MeasureFacing();
 	}
 
@@ -286,6 +309,114 @@ internal sealed class HumanoidBones
 		var slots = limb.Skip( Math.Max( 0, limb.Count - names.Length ) ).ToList();
 		AssignChain( slots, side, names, roles );
 	}
+
+	// Fingers hang from each hand: every chain of two or more bones below it that is not a helper, and a bone that
+	// fans out into several chains is a palm carrying them. A finger's name decides which it is (thumb, index,
+	// middle, ring, pinky or little, or a number counting from the thumb); otherwise the fingers are ordered across
+	// the hand from the thumb, the chain pointing furthest from the others. A first bone named as a metacarpal, or
+	// starting near the wrist ahead of three more, is the finger's base; the next three are its joints.
+	private void FindFingers()
+	{
+		foreach ( var side in new[] { "left", "right" } )
+		{
+			if ( !_roles.TryGetValue( $"{side}_hand", out var hand ) )
+				continue;
+			var chains = new List<List<int>>();
+			CollectFingers( hand, chains );
+			if ( chains.Count == 0 )
+				continue;
+			var named = NameFingers( chains );
+			if ( named.Any( finger => finger < 0 ) || named.Distinct().Count() != named.Length )
+				named = OrderFingers( hand, chains );
+			for ( var i = 0; i < chains.Count; i++ )
+			{
+				if ( named[ i ] >= 0 )
+					AssignFinger( hand, chains[ i ], side, Fingers[ named[ i ] ] );
+			}
+		}
+	}
+
+	private void CollectFingers( int bone, List<List<int>> chains )
+	{
+		foreach ( var child in _children[ bone ] )
+		{
+			if ( !FingerBone( child ) )
+				continue;
+			var chain = new List<int> { child };
+			var at = child;
+			while ( _children[ at ].Count( FingerBone ) == 1 )
+			{
+				at = _children[ at ].First( FingerBone );
+				chain.Add( at );
+			}
+			if ( _children[ at ].Count( FingerBone ) > 1 )
+				CollectFingers( at, chains );
+			else if ( chain.Count( link => !EndMarker( link ) ) >= 2 )
+				chains.Add( chain );
+		}
+	}
+
+	// Which finger each chain's names reveal, by index into Fingers, or -1. Numbered fingers count from the thumb,
+	// from zero or one as the rig numbers them.
+	private int[] NameFingers( List<List<int>> chains )
+	{
+		var named = chains.Select( chain => chain.Select( bone => Words( _names[ bone ] ) )
+			.Select( words => Array.FindIndex( FingerWords, finger => words.Any( finger.Contains ) ) )
+			.FirstOrDefault( finger => finger >= 0, -1 ) ).ToArray();
+		if ( named.All( finger => finger >= 0 ) )
+			return named;
+		var numbers = chains.Select( chain => FingerNumber( chain[ 0 ] ) ).ToArray();
+		if ( numbers.Any( number => number < 0 ) )
+			return named;
+		var first = numbers.Min();
+		return numbers.Select( number => number - first < Fingers.Length ? number - first : -1 ).ToArray();
+	}
+
+	// The number after "finger" in a bone name (its first digit, which a finger's own joints share), or -1.
+	private int FingerNumber( int bone )
+	{
+		var words = Words( _names[ bone ] );
+		var at = Array.IndexOf( words, "finger" );
+		return at >= 0 && at + 1 < words.Length && char.IsDigit( words[ at + 1 ][ 0 ] ) ? words[ at + 1 ][ 0 ] - '0' : -1;
+	}
+
+	// Unnamed fingers: the thumb points furthest from the mean of all the fingers; the rest follow by how far their
+	// first bone lies from the thumb's.
+	private int[] OrderFingers( int hand, List<List<int>> chains )
+	{
+		var directions = chains.Select( chain => _bind[ chain[ ^1 ] ] - _bind[ hand ] )
+			.Select( offset => offset.LengthSquared() > 1e-10f ? Vector3.Normalize( offset ) : Vector3.Zero ).ToArray();
+		var mean = directions.Aggregate( Vector3.Zero, ( sum, direction ) => sum + direction );
+		var thumb = Enumerable.Range( 0, chains.Count ).OrderBy( i => Vector3.Dot( directions[ i ], mean ) ).First();
+		var order = Enumerable.Range( 0, chains.Count ).Where( i => i != thumb )
+			.OrderBy( i => Vector3.Distance( _bind[ chains[ i ][ 0 ] ], _bind[ chains[ thumb ][ 0 ] ] ) ).ToList();
+		var named = new int[ chains.Count ];
+		named[ thumb ] = 0;
+		for ( var i = 0; i < order.Count; i++ )
+			named[ order[ i ] ] = i + 1 < Fingers.Length ? i + 1 : -1;
+		return named;
+	}
+
+	private void AssignFinger( int hand, List<int> chain, string side, string finger )
+	{
+		var bones = chain.Where( bone => !EndMarker( bone ) ).ToList();
+		var start = 0;
+		var reach = Vector3.Distance( _bind[ chain[ ^1 ] ], _bind[ hand ] );
+		if ( finger != "thumb" && bones.Count >= 2 && (Words( _names[ bones[ 0 ] ] ).Any( FingerBase.Contains )
+			|| bones.Count >= 4 && Vector3.Distance( _bind[ bones[ 0 ] ], _bind[ hand ] ) < BaseReach * reach) )
+		{
+			_roles.TryAdd( $"{side}_{finger}_base", bones[ 0 ] );
+			start = 1;
+		}
+		for ( var joint = 0; joint < 3 && start + joint < bones.Count; joint++ )
+			_roles.TryAdd( $"{side}_{finger}{joint + 1}", bones[ start + joint ] );
+	}
+
+	// Bones a finger may run through: anything but helpers of other kinds (twist, IK, attachments).
+	private bool FingerBone( int bone ) =>
+		!Words( _names[ bone ] ).Any( word => Helpers.Contains( word ) && !FingerHelpers.Contains( word ) );
+
+	private bool EndMarker( int bone ) => Words( _names[ bone ] ).Any( EndMarkers.Contains );
 
 	private void AssignChain( List<int> chain, string side, string[] slots, string[] roles )
 	{

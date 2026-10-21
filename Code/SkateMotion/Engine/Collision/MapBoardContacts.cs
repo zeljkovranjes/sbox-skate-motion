@@ -29,6 +29,8 @@ internal sealed class MapBoardContacts
 	private readonly Func<PhysicsShape, bool> _represented;
 	private bool _refresh = true;
 	private bool _slide;
+	private readonly Func<PhysicsShape, bool> _railShape = shape => shape.Collider.IsValid()
+		&& shape.Collider.GameObject.Tags.Has( SkateTags.Grind );
 
 	internal int ContactCount => _stream.Count;
 	internal int TriangleCount => _stream.TriangleCount;
@@ -43,7 +45,9 @@ internal sealed class MapBoardContacts
 			2.938735877055719e-39f, 1.52587890625e-5f, 1e-6f ) );
 		var truckRadius = (TruckDiameterScale * .5f) * radius;
 		var truckHalfLength = (TruckLengthScale * .5f) * DefaultWheelWidth;
-		_inputs = BoardCollisionInputs.CreateRoundParts( new NumericsVector( .8f, .22f, .025f ),
+		// The deck's own size, as the board's collider has it: a deck shorter here than there met the floor first through
+		// the collider, and the overlap was then lifted out of the floor by position alone.
+		_inputs = BoardCollisionInputs.CreateRoundParts( new NumericsVector( settings.DeckCollisionLength, settings.DeckWidth, settings.DeckThickness ),
 			truckRadius, truckHalfLength, radius );
 		_stream = new( _source, Bind, duplicateSquaredTolerance, deferredReduction );
 		_represented = _stream.ContainsShape;
@@ -79,8 +83,10 @@ internal sealed class MapBoardContacts
 		return result;
 	}
 
+	/// <param name="railSlide">The deck slides across a rail: the board does not collide with rails, the rail contact
+	/// holding it on top (see SkateBody).</param>
 	internal void Step( ArticulatedBoard board, ArticulatedContacts native,
-		bool slide, float steering, float step )
+		bool slide, float steering, float step, bool railSlide = false )
 	{
 		if ( _refresh )
 		{
@@ -96,7 +102,7 @@ internal sealed class MapBoardContacts
 		for ( var i = 0; i < _front.Length; ++i )
 			_front[ i ] = board.Bodies[ i ].Position;
 		_source.FrontReferences = _front;
-		_stream.Generate( _inputs.Bodies );
+		_stream.Generate( _inputs.Bodies, railSlide ? _railShape : null );
 		board.StepGenerated( _stream.Records, _bindings,
 			native.WithoutGeneratedShapes( _represented ), steering, 0f, step );
 	}

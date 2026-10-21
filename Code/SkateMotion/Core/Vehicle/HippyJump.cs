@@ -95,4 +95,14 @@ internal sealed class HippyJump
 		Offset = Vector3.Zero;
 		VerticalSpeed = 0f;
 	}
+
+	/// <summary>
+	/// The rider is off the board: forgets the jump and the control held for it, so a crouch held while stepping off
+	/// does not go on crouching the rider on foot.
+	/// </summary>
+	internal void Clear()
+	{
+		Reset();
+		_held = false;
+	}
 }

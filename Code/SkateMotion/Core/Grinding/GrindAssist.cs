@@ -25,10 +25,12 @@ internal static class GrindAssist
 	/// <summary>
 	/// Change of the board's velocity this step: zero while rising, out of reach, or with no rail to lock onto.
 	/// <paramref name="lowest"/> is the height of the board's lowest truck; <paramref name="lockReach"/> is how far to the side a
-	/// rail may be; positions are metres, z up.
+	/// rail may be; positions are metres, z up. <paramref name="covered"/> is how much of the way to the rail the jump's
+	/// sideways move (<see cref="GrindAirAssist"/>) still closes by itself: the steering closes only the rest, alongside
+	/// it, so the two add up.
 	/// </summary>
 	internal static Vector3 VelocityChange( Vector3 position, float lowest, Vector3 velocity, ReadOnlySpan<RailSegment> rails,
-		float gravity, float step, float lockReach = Reach )
+		float gravity, float step, float lockReach = Reach, float covered = 0f )
 	{
 		if ( velocity.Z >= 0f || gravity <= 0f )
 			return Vector3.Zero;
@@ -62,10 +64,12 @@ internal static class GrindAssist
 			var across = Vector3.Dot( travel, side );
 			if ( MathF.Abs( across ) > CrossLimit || MathF.Abs( forward ) < 0.1f )
 				continue;
+			// What the steering itself has to close, the jump's move taking the rest.
+			var steered = MathF.Sign( offset ) * MathF.Max( MathF.Abs( offset ) - covered, 0f );
 			// Sideways speed falling steadily to nothing on arrival covers twice its average: aim for that.
-			var aim = time > Arriving ? -2f * offset / time : 0f;
+			var aim = time > Arriving ? -2f * steered / time : 0f;
 			// The bend limit applies to the path as a whole: the offset closed over the time left.
-			if ( MathF.Atan( MathF.Abs( offset ) / MathF.Max( time, Arriving ) / MathF.Abs( forward ) ) > MaximumBend )
+			if ( MathF.Atan( MathF.Abs( steered ) / MathF.Max( time, Arriving ) / MathF.Abs( forward ) ) > MaximumBend )
 				continue;
 			bestOffset = MathF.Abs( offset );
 			best = side * ((aim - across) * Math.Min( 1f, step / Response ));

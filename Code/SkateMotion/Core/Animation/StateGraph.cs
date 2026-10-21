@@ -52,6 +52,23 @@ internal sealed class StateGraph
 	/// <summary>Dotted names of the current states below the root.</summary>
 	internal string State => string.Join( ".", _path.Skip( 1 ).Select( node => node.Definition.Name ) );
 
+	/// <summary>True when the current state, or one above it, has a way out that waits for the playing clip to end.</summary>
+	internal bool AwaitsClipEnd
+	{
+		get
+		{
+			foreach ( var node in _path )
+			{
+				foreach ( var (transition, _) in node.Transitions )
+				{
+					if ( EndsClip( transition.Guard ) )
+						return true;
+				}
+			}
+			return false;
+		}
+	}
+
 	/// <summary>True when any current state lists <paramref name="action"/> among its actions.</summary>
 	internal bool HasAction( string action )
 	{
@@ -83,6 +100,12 @@ internal sealed class StateGraph
 	/// <summary>Length of the current clip in seconds, set by the player before each update.</summary>
 	internal float ClipLength { get; set; } = float.PositiveInfinity;
 
+	/// <summary>
+	/// Reads a clip flag from the playing clip's own attribute windows (see <see cref="ClipFlags"/>): true or false where
+	/// the clip times the flag, null to read it from the facts instead.
+	/// </summary>
+	internal Func<string, bool?> ClipFlag { get; set; }
+
 	internal void Update( StateFacts facts, float delta, AnimationPlaybackStatus? playback = null )
 	{
 		_facts = facts;
@@ -94,12 +117,18 @@ internal sealed class StateGraph
 			Enter( _root );
 			return;
 		}
+		var refused = false;
 		for ( var i = _path.Count - 1; i >= 0; i-- )
 		{
 			foreach ( var (transition, target) in _path[ i ].Transitions )
 			{
-				if ( target is null || !PassesTransition( transition.Guard, _path[ i ] ) || !CanEnter( target ) )
+				if ( target is null || !PassesTransition( transition.Guard, _path[ i ] ) )
 					continue;
+				if ( !CanEnter( target ) )
+				{
+					refused |= i == _path.Count - 1 && EndsClip( transition.Guard );
+					continue;
+				}
 				Enter( target );
 				return;
 			}
@@ -114,7 +143,14 @@ internal sealed class StateGraph
 		// A current state that may not be interrupted keeps its whole path while that path's staying tests pass:
 		// nothing earlier anywhere above it takes over.
 		if ( string.Equals( _path[ ^1 ].Definition.Interruptible, "false", StringComparison.OrdinalIgnoreCase ) )
+		{
+			// Once its clip has ended and its way out leads nowhere that may be entered now (a flip caught for the air
+			// that comes down on a rail), it holds nothing any more: the graph chooses again below the deepest state on
+			// the path that could still be entered afresh.
+			if ( refused )
+				Release();
 			return;
+		}
 		for ( var i = 1; i < _path.Count; i++ )
 		{
 			var node = _path[ i ];
@@ -133,6 +169,32 @@ internal sealed class StateGraph
 				}
 			}
 		}
+	}
+
+	private void Release()
+	{
+		for ( var i = 1; i < _path.Count - 1; i++ )
+		{
+			if ( Passes( _path[ i ].Definition.Guard, Entry, _path[ i ] ) )
+				continue;
+			Choose( _path[ i - 1 ], null );
+			return;
+		}
+	}
+
+	// Whether a transition's guard waits for the playing clip to end.
+	private static bool EndsClip( StateTestDefinition test )
+	{
+		if ( test is null )
+			return false;
+		if ( string.Equals( test.Test, "clip-ending", StringComparison.OrdinalIgnoreCase ) )
+			return true;
+		foreach ( var item in test.Items )
+		{
+			if ( EndsClip( item ) )
+				return true;
+		}
+		return false;
 	}
 
 	// A transition only lands where the target, and every state above it that is not already current, may be
@@ -327,6 +389,8 @@ internal sealed class StateGraph
 			case "speed":
 				return Compare( test, test.Absolute ? MathF.Abs( facts.Speed ) : facts.Speed );
 			case "clip-flag":
+				if ( ClipFlag?.Invoke( test.Flag ) is { } windowed )
+					return windowed;
 				return facts.Facts.TryGetValue( "clip-flag:" + test.Flag, out var flag ) && flag != 0f;
 			case "random":
 				return _random.Next( 2 ) == 0;

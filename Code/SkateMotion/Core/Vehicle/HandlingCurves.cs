@@ -160,6 +160,11 @@ internal static class HandlingCurves
 		_ => Grinding.GrindAssist.Reach
 	};
 
+	/// <summary>Farthest (m) a board coming down beside a rail is moved onto it in one jump: the measured move on
+	/// Normal, scaled with the lock-on's reach on the other difficulties.</summary>
+	internal static float GrindNudge( HandlingDifficulty difficulty ) =>
+		Grinding.GrindAirAssist.Total * GrindReach( difficulty ) / Grinding.GrindAssist.Reach;
+
 	/// <summary>Fastest (rad/s) the board turns itself to line up with its landing.</summary>
 	internal static float AlignRate( HandlingDifficulty difficulty ) => difficulty == HandlingDifficulty.Hard ? 0.5f : 8f;
 }

@@ -16,6 +16,34 @@ public sealed class Skateboard : Component, IBoardDisplay
 	/// <summary>Build an original deck, two trucks and four simulated wheels at startup.</summary>
 	[Property] public bool GenerateGeometry { get; set; } = true;
 
+	/// <summary>
+	/// Any skateboard model, shown in place of the generated board: its deck, trucks and four wheels are found from its
+	/// own geometry (or its bones), so its trucks steer, its deck leans into turns and its wheels spin, and the board
+	/// rides on the model's own wheelbase, track, wheel size and height. Changing it rebuilds the board.
+	/// </summary>
+	[Property, Title( "Board Model" )]
+	public Model BoardModel
+	{
+		get => _boardModel;
+		set
+		{
+			if ( _boardModel == value )
+				return;
+			_boardModel = value;
+			if ( _adapter is not null )
+				Rebuild();
+		}
+	}
+
+	private Model _boardModel;
+	private BoxCollider _deckCollider;
+
+	/// <summary>The board's size as simulated, and where its shown parts come from.</summary>
+	public SkateBoardDimensions Dimensions { get; private set; }
+
+	/// <summary>How far the deck dips into the current turn on its trucks, radians (positive: its left side down).</summary>
+	public float Lean => _visuals?.Roll ?? 0f;
+
 	/// <summary>Native collision representation of the simulated deck.</summary>
 	[RequireComponent] public Rigidbody Body { get; set; }
 
@@ -30,6 +58,10 @@ public sealed class Skateboard : Component, IBoardDisplay
 
 	/// <summary>Raised when an input gesture produces a pop impulse.</summary>
 	public event Action<SkateTrick> TrickStarted;
+
+	/// <summary>True when the trick last reported by <see cref="TrickStarted"/> was popped off the nose: its nollie
+	/// version.</summary>
+	public bool LastTrickFromNose { get; private set; }
 
 	/// <summary>Raised when wheel support returns, with approach speed in metres per second.</summary>
 	public event Action<float> Landed;
@@ -55,6 +87,13 @@ public sealed class Skateboard : Component, IBoardDisplay
 	/// </summary>
 	public bool? PushContact { get; set; }
 
+	/// <summary>
+	/// Whether the rider's animation holds the board dark side up (a dark catch, a dark landing, a darkslide), set each
+	/// frame by an animated rider: on the ground the board then skids on its grip instead of rolling and is not pushed,
+	/// and a bail lets it go upside down, as it was shown.
+	/// </summary>
+	public bool DarkSideUp { get; set; }
+
 	/// <summary>Connection whose input the host accepts; empty accepts only input set on the host itself.</summary>
 	[Sync( SyncFlags.FromHost )] public Guid DriverId { get; set; }
 
@@ -68,6 +107,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 	private const float RailSearchInches = 60f;
 	private const float CollisionEventSpeed = 1f;
 	private readonly RailSegment[] _rails = new RailSegment[ Core.Animation.GrindEdgeQuery.Capacity ];
+	private readonly System.Collections.Generic.List<RailSolid> _solids = new();
 
 	private SkateInput _input;
 	private bool _forwardInput;
@@ -79,6 +119,13 @@ public sealed class Skateboard : Component, IBoardDisplay
 
 	// Seconds after the last display pose that the board still counts as animated.
 	private const float AnimationTimeout = 0.5f;
+
+	// Seconds a display pose may go without being renewed before it is let go, the seconds it is let go over, and the
+	// seconds a bail lets it go over (from the bail itself, while the shown and physical boards are still close).
+	private const float DisplayStale = 0.1f;
+	private const float DisplayRelease = 0.2f;
+	private const float BailRelease = 0.12f;
+	private float _release = DisplayRelease;
 	private BoardVisuals _visuals;
 	private readonly StepSmoother _smooth = new();
 	private bool _riderAttached = true;
@@ -91,7 +138,12 @@ public sealed class Skateboard : Component, IBoardDisplay
 	{
 		_riderAttached = attached;
 		_input = default;
+		var before = WorldRotation;
 		_adapter?.SetRiderAttached( attached );
+		// Stepping off a board held dark side up turns it over at once (it is left as it was shown): the shown board is
+		// placed again now, from the turned board, rather than its trucks and wheels turning over with it until next frame.
+		if ( _adapter is not null && Body.IsValid() && Vector3.Dot( before.Up, WorldRotation.Up ) < 0f )
+			_visuals?.Update( _adapter.Bodies, Simulating, RenderTransform, _solids, State.Grind != SkateGrind.None );
 	}
 
 	/// <summary>Sets held controls until the next call; on a networked client they are sent to the host.</summary>
@@ -111,7 +163,8 @@ public sealed class Skateboard : Component, IBoardDisplay
 
 	[Rpc.Host( NetFlags.Unreliable )]
 	private void ReceiveInput( float steer, float push, float brake, float flickX, float flickY, float lean,
-		bool slide, bool goofy, bool pump, SkateAirGrab grab, bool gesture, SkatePushFeet pushFeet, bool newPush, bool hippyJump )
+		bool slide, bool goofy, bool pump, SkateAirGrab grab, bool gesture, SkatePushFeet pushFeet, bool newPush, bool hippyJump,
+		bool catching, SkatePushFeet feetOff, bool handPlant )
 	{
 		if ( Rpc.Caller is null || DriverId == Guid.Empty || Rpc.Caller.Id != DriverId )
 			return;
@@ -119,7 +172,10 @@ public sealed class Skateboard : Component, IBoardDisplay
 		{
 			PushFeet = pushFeet,
 			NewPush = newPush,
-			HippyJump = hippyJump
+			HippyJump = hippyJump,
+			Catch = catching,
+			FeetOff = feetOff,
+			HandPlant = handPlant
 		};
 	}
 
@@ -146,6 +202,51 @@ public sealed class Skateboard : Component, IBoardDisplay
 	/// <summary>Why the board last bailed: "impact", "landing tilt", "grind balance" or "requested"; null before any bail.</summary>
 	public string BailReason => _adapter?.BailReason;
 
+	// Where the hand of the board's last plant goes, in world space: the top of the wall the board left, found once per
+	// lip by raising a level ray into the wall from its highest wheel contact until it stops hitting.
+	internal Vector3 HandPlantLip
+	{
+		get
+		{
+			if ( _adapter is null )
+				return WorldPosition;
+			var lip = SkateUnits.Inches( _adapter.HandPlantLip );
+			if ( _plantLipFrom != lip )
+			{
+				_plantLipFrom = lip;
+				_plantLip = WallTop( lip, -SkateUnits.ToEngine( _adapter.HandPlantOutward ) );
+			}
+			return _plantLip;
+		}
+	}
+
+	private Vector3? _plantLipFrom;
+	private Vector3 _plantLip;
+
+	// How far (in) above a wheel's last touch the wall's top is looked for.
+	private const float WallSearch = 16f;
+
+	private Vector3 WallTop( Vector3 point, Vector3 inward )
+	{
+		if ( inward.IsNearZeroLength || !WallAt( point, inward ) || WallAt( point + Vector3.Up * WallSearch, inward ) )
+			return point;
+		var low = 0f;
+		var high = WallSearch;
+		for ( var i = 0; i < 6; i++ )
+		{
+			var middle = (low + high) * 0.5f;
+			if ( WallAt( point + Vector3.Up * middle, inward ) )
+				low = middle;
+			else
+				high = middle;
+		}
+		return point + Vector3.Up * low;
+	}
+
+	private bool WallAt( Vector3 point, Vector3 inward ) =>
+		Scene.Trace.Ray( point - inward * 4f, point + inward * 4f ).IgnoreGameObjectHierarchy( GameObject )
+			.WithoutTags( SkateTags.Rider ).IgnoreDynamic().Run().Hit;
+
 	/// <summary>Disables rider assistance; native deck collision continues.</summary>
 	public void Bail()
 	{
@@ -153,7 +254,16 @@ public sealed class Skateboard : Component, IBoardDisplay
 			return;
 		_adapter?.Bail();
 		State = State with { IsBailed = true, Balance = SkateBalanceMode.None };
+		ReleaseDisplay();
 		Bailed?.Invoke();
+	}
+
+	// The rider let go of the board (a bail): whatever display pose its animation held the shown board at is handed back to
+	// the physical board from now, over BailRelease, rather than staying where the animation last had it (in the air).
+	private void ReleaseDisplay()
+	{
+		_displayedAt = float.NegativeInfinity;
+		_release = BailRelease;
 	}
 
 	/// <summary>Clears transient controls and gesture state after an explicit game-managed respawn.</summary>
@@ -164,29 +274,115 @@ public sealed class Skateboard : Component, IBoardDisplay
 		State = default;
 	}
 
-	protected override void OnStart()
+	protected override void OnStart() => Build();
+
+	private void Build()
 	{
 		var settings = SkateProfiles.Read( Profile );
 		var radius = Profile?.WheelRadius ?? 0.0285f;
-		var rig = Components.Get<SkateboardRig>()?.Read( settings, radius )
-			?? new BoardRig( GameObject, settings, radius );
-		_visuals = new( GameObject, settings, radius, rig, GenerateGeometry );
-		if ( GenerateGeometry )
+		string problem = null;
+		var parts = BoardModel is null ? null : BoardModelParts.Of( BoardModel, out problem );
+		if ( BoardModel is not null && parts is null )
+			Log.Warning( $"Skateboard {GameObject.Name}: the parts of {BoardModel.ResourceName} could not be found (it {problem}), so it is "
+				+ "shown whole, without steering trucks or spinning wheels. Separate meshes for its wheels, or bones named for "
+				+ "its wheels and trucks (see Skateboard Rig), let them be found." );
+		var whole = parts is null ? BoardModel : null;
+		var rig = Components.Get<SkateboardRig>()?.Read( settings, radius, parts, whole )
+			?? new BoardRig( GameObject, settings, radius, parts: parts ) { DeckModel = whole };
+		var generate = GenerateGeometry && BoardModel is null;
+		_visuals = new( GameObject, rig.Settings, rig.WheelRadius, rig, generate );
+		Dimensions = Measure( rig, generate );
+		if ( (generate || parts is not null) && (Components.Get<BoxCollider>() is null || _deckCollider.IsValid()) )
 		{
-			if ( Components.Get<BoxCollider>() is null )
-			{
-				var collider = Components.Create<BoxCollider>();
-				collider.Scale = new Vector3( 0.8f, 0.22f, 0.025f ) * SkateUnits.InchesPerMetre;
-			}
+			_deckCollider ??= Components.Create<BoxCollider>();
+			// The deck's size its simulation collides at (the generated deck's, or the board model's measured one).
+			_deckCollider.Scale = new Vector3( rig.Settings.DeckCollisionLength, rig.Settings.DeckWidth, rig.Settings.DeckThickness )
+				* SkateUnits.InchesPerMetre;
 		}
-		_adapter = new( Body, Profile, rig );
+		_adapter = new( Body, rig );
 		_adapter.SetRiderAttached( _riderAttached );
+	}
+
+	// A board model changed while running: the shown board and its simulation are built again where the board is.
+	private void Rebuild()
+	{
+		_visuals?.Destroy();
+		_adapter?.Disable();
+		_smooth.Reset();
+		Build();
+	}
+
+	private SkateBoardDimensions Measure( BoardRig rig, bool generated )
+	{
+		var settings = rig.Settings;
+		var layout = rig.Parts?.Layout;
+		var bones = rig.PartBones;
+		var source = layout is not null
+			? bones is not null && bones[ (int)Core.BoardModel.BoardPart.FrontLeftWheel ] >= 0
+				&& bones[ (int)Core.BoardModel.BoardPart.RearRightWheel ] >= 0 ? SkateBoardSource.Bones
+				: layout.Source == Core.BoardModel.BoardPartSource.Pieces ? SkateBoardSource.Pieces : SkateBoardSource.Clusters
+			: generated ? SkateBoardSource.Generated
+			: BoardModel is not null ? SkateBoardSource.Whole : SkateBoardSource.Rig;
+		// The generated deck's size, or a custom deck model's box.
+		var deck = layout is null && !generated ? _visuals?.DeckBounds : null;
+		var length = layout?.Length ?? (deck?.Size.x ?? BoardGeometry.DeckLength * SkateUnits.InchesPerMetre) / SkateUnits.InchesPerMetre;
+		var width = layout?.Width ?? (deck?.Size.y ?? BoardGeometry.DeckWidth * SkateUnits.InchesPerMetre) / SkateUnits.InchesPerMetre;
+		var thickness = layout?.Thickness ?? (deck is null ? BoardGeometry.DeckThickness : MathF.Min( deck.Value.Size.z / SkateUnits.InchesPerMetre, 0.03f ));
+		return new SkateBoardDimensions( length, width, thickness, settings.Wheelbase, settings.Track, rig.WheelRadius,
+			settings.RideHeight, source );
+	}
+
+	// What the shown board's lean and wheels follow this frame: the controls the board was given and what it is doing.
+	private BoardMotion Motion()
+	{
+		var state = State;
+		var touching = state.IsAirborne || state.Grind != SkateGrind.None ? 0
+			: state.Balance == SkateBalanceMode.Manual ? 0b1100
+			: state.Balance == SkateBalanceMode.NoseManual ? 0b0011
+			: 0b1111;
+		var lean = !_riderAttached || state.IsBailed || DarkSideUp || state.Grind != SkateGrind.None || state.PowerSlide != 0
+			|| state.Reverting || state.WallRiding || state.HandPlanting ? Core.Vehicle.DeckLeanMode.Level
+			: state.IsAirborne ? Core.Vehicle.DeckLeanMode.Airborne
+			: state.Balance != SkateBalanceMode.None ? Core.Vehicle.DeckLeanMode.Manual
+			: Core.Vehicle.DeckLeanMode.Carving;
+		var input = _riderAttached ? _input : default;
+		return new BoardMotion( input.Steer, state.Speed, input.Push > 0f, lean, touching );
 	}
 
 	protected override void OnUpdate()
 	{
+		// The shown board rests on any rail it reaches, wherever an animation holds it.
+		Scene.GetSystem<GrindRails>()?.CollectSolids( WorldPosition, RailSearchInches, _solids );
+		if ( _visuals is not null )
+		{
+			_visuals.Grind = State.Grind;
+			_visuals.GrindOnLedgeTop = State.GrindOnLedgeTop;
+		}
+		// A display pose nobody renews (an animation that stopped with the clip's board shown) is handed back to the physical
+		// board, rather than holding the shown board where the clip last had it; a bail hands it back at once (ReleaseDisplay).
+		if ( Time.Now - _displayedAt > DisplayStale )
+			_visuals?.FadeDisplay( Time.Delta / _release );
 		if ( _adapter is not null && Body.IsValid() )
-			_visuals?.Update( _adapter.Bodies, Body.MotionEnabled, RenderTransform );
+		{
+			_visuals?.Animate( _adapter.Bodies, Motion(), Time.Delta );
+			_visuals?.Update( _adapter.Bodies, Simulating, RenderTransform, _solids, State.Grind != SkateGrind.None );
+		}
+	}
+
+	/// <summary>
+	/// Turns a board lying upside down back over for a rider getting on it: physics rights it at once, raised onto its
+	/// wheels, and the shown board rolls over from where it lay instead of flipping in a frame.
+	/// </summary>
+	internal void TurnUpright()
+	{
+		if ( _adapter is null || IsProxy || WorldRotation.Up.z >= 0f )
+			return;
+		var before = RenderTransform;
+		_adapter.TurnUpright();
+		_smooth.Reset();
+		_visuals?.BeginTurnOver( before, WorldTransform );
+		if ( Body.IsValid() )
+			_visuals?.Update( _adapter.Bodies, Simulating, RenderTransform, _solids, State.Grind != SkateGrind.None );
 	}
 
 	/// <summary>
@@ -197,9 +393,10 @@ public sealed class Skateboard : Component, IBoardDisplay
 	{
 		// A board whose tricks an animation shows takes no flip or spin of its own from the pop.
 		_displayedAt = Time.Now;
+		_release = DisplayRelease;
 		_visuals?.SetDisplay( pose, weight );
 		if ( _adapter is not null && Body.IsValid() )
-			_visuals?.Update( _adapter.Bodies, Body.MotionEnabled, RenderTransform );
+			_visuals?.Update( _adapter.Bodies, Simulating, RenderTransform, _solids, State.Grind != SkateGrind.None );
 	}
 
 	/// <summary>
@@ -217,14 +414,60 @@ public sealed class Skateboard : Component, IBoardDisplay
 	/// <summary>Each truck and wheel as a box in the frame of <see cref="DisplayedTransform"/>.</summary>
 	public System.Collections.Generic.IReadOnlyList<BBox> PartBounds => _visuals?.PartBounds ?? [];
 
-	/// <summary>Where the deck is shown this frame (the physical pose unless a display pose is blended in).</summary>
-	public Transform DisplayedTransform => _visuals?.DisplayedDeck ?? RenderTransform;
+	/// <summary>
+	/// Where the deck is shown this frame (the physical pose unless a display pose is blended in); while the board is
+	/// disabled (carried), where its deck is drawn as it is carried.
+	/// </summary>
+	public Transform DisplayedTransform => Enabled ? _visuals?.DisplayedDeck ?? RenderTransform : _visuals?.DrawnDeck ?? WorldTransform;
+
+	Vector3 IBoardDisplay.RailLift => _visuals?.Lift ?? Vector3.Zero;
+
+	void IBoardDisplay.HoldSlidePitch( bool hold )
+	{
+		if ( _visuals is not null )
+			_visuals.HoldSlide = hold;
+	}
+
+	Transform IBoardDisplay.RiddenTransform => _visuals?.Leaned( RenderTransform ) ?? RenderTransform;
+
+	System.Collections.Generic.IReadOnlyList<RailSolid> IBoardDisplay.RailSolids => _solids;
+
+	// True while this board's own simulation moves its bodies: not while a rider carries it (the board is disabled), nor
+	// on a client, which only reads the host's state. Its trucks and wheels are then shown where physics holds them.
+	private bool Simulating => Active && !IsProxy;
 
 	/// <summary>
 	/// The physical pose as shown this frame: interpolated between the last two physics steps, so the board and
 	/// anything placed on it move smoothly at any frame rate.
 	/// </summary>
 	public Transform RenderTransform => _smooth.At( WorldTransform, Time.Now );
+
+	/// <summary>
+	/// The board was just put down where it is by the rider carrying it (getting on with it, or dropping in): it is shown
+	/// going on as <paramref name="rider"/> showed the rider moving, carried onto the board. Enabled again with no steps
+	/// recorded it stood a physics step behind and then jumped on, and the rider on it with it.
+	/// </summary>
+	internal void ShowPutDown( StepSmoother rider ) => _smooth.Follow( rider, WorldTransform );
+
+	/// <summary>
+	/// As <see cref="ShowPutDown(StepSmoother)"/>, the board going on over <see cref="PutDownEase"/> from
+	/// <paramref name="shown"/>, where it was shown a moment ago (tipped over a drop-in's lip by the rider's clip), to where
+	/// it went down, rather than appearing there.
+	/// </summary>
+	internal void ShowPutDown( StepSmoother rider, Transform shown )
+	{
+		_smooth.Follow( rider, WorldTransform );
+		_smooth.EaseFrom( shown, WorldTransform, Time.Now, PutDownEase );
+	}
+
+	// Seconds a board put down from where it was shown takes to go on to where it went down.
+	private const float PutDownEase = 0.25f;
+
+	/// <summary>
+	/// The rider at <paramref name="placed"/> is stepping off: <paramref name="rider"/> takes over the board's recorded
+	/// steps, moved onto the rider, so the rider is shown going on as the board it rode was shown.
+	/// </summary>
+	internal void HandStepsTo( StepSmoother rider, Transform placed ) => rider.Follow( _smooth, placed );
 
 	protected override void OnEnabled()
 	{
@@ -263,6 +506,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 		var railCount = Scene.GetSystem<GrindRails>()?.Collect( WorldPosition, RailSearchInches, _rails ) ?? 0;
 		_adapter.AnimatedTricks = Time.Now - _displayedAt < AnimationTimeout;
 		_adapter.PushContact = PushContact;
+		_adapter.DarkSideUp = DarkSideUp;
 		var result = _adapter.Step( _riderAttached ? _input : default, Time.Delta, _rails.AsSpan( 0, railCount ) );
 		StepMilliseconds = (float)System.Diagnostics.Stopwatch.GetElapsedTime( started ).TotalMilliseconds;
 		State = new( _adapter.Speed,
@@ -281,14 +525,32 @@ public sealed class Skateboard : Component, IBoardDisplay
 			Fakie = _adapter.Fakie,
 			BodyFlip = result.BodyFlip,
 			WallRiding = result.WallRiding,
-			Crouch = result.Crouch
+			HandPlanting = result.HandPlanted,
+			Crouch = result.Crouch,
+			GrindRailOnRight = _adapter.GrindRailOnRight,
+			GrindNoseRight = _adapter.GrindNoseRight,
+			GrindBackward = result.GrindShape.Backward,
+			GrindTwisted = result.GrindShape.Twisted,
+			GrindLow = result.GrindShape.Low,
+			GrindOnLedgeTop = result.GrindShape.OnLedgeTop,
+			NamedGrind = (SkateGrind)result.NamedGrind,
+			NamedBackward = result.NamedGrindShape.Backward,
+			NamedTwisted = result.NamedGrindShape.Twisted,
+			NamedLow = result.NamedGrindShape.Low,
+			NamedOnLedgeTop = result.NamedGrindShape.OnLedgeTop
 		};
 		if ( result.Trick != Core.TrickKind.None )
+		{
+			LastTrickFromNose = result.TrickNose;
 			TrickStarted?.Invoke( (SkateTrick)result.Trick );
+		}
 		if ( result.Landed )
 			Landed?.Invoke( result.ImpactSpeed );
 		if ( State.IsBailed && !wasBailed )
+		{
+			ReleaseDisplay();
 			Bailed?.Invoke();
+		}
 		if ( State.Grind != previousGrind )
 		{
 			if ( State.Grind == SkateGrind.None )
@@ -303,6 +565,8 @@ public sealed class Skateboard : Component, IBoardDisplay
 		Stepped?.Invoke( _input );
 		PublishState();
 		_smooth.Record( WorldTransform, Time.Now, Time.Delta );
+		if ( _adapter is not null && Body.IsValid() && Simulating )
+			_visuals?.RecordStep( _adapter.Bodies, Time.Now, Time.Delta );
 	}
 
 	private void PublishState()
@@ -320,7 +584,8 @@ public sealed class Skateboard : Component, IBoardDisplay
 	{
 		if ( _forwardInput )
 			ReceiveInput( _input.Steer, _input.Push, _input.Brake, _input.FlickX, _input.FlickY, _input.Lean,
-				_input.Slide, _input.Goofy, _input.Pump, _input.Grab, _input.Gesture, _input.PushFeet, _input.NewPush, _input.HippyJump );
+				_input.Slide, _input.Goofy, _input.Pump, _input.Grab, _input.Gesture, _input.PushFeet, _input.NewPush, _input.HippyJump,
+				_input.Catch, _input.FeetOff, _input.HandPlant );
 		State = new( NetSpeed, NetWheels, NetAirborne, NetBailed, 0f ) { Balance = NetBalance, Grind = NetGrind };
 	}
 }

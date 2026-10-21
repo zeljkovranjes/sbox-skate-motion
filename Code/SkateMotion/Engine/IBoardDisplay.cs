@@ -14,6 +14,19 @@ internal interface IBoardDisplay
 	/// <summary>The physical pose as shown this frame (smoothed between physics steps).</summary>
 	Transform RenderTransform { get; }
 
+	/// <summary>How far (world inches) the shown board is raised out of a rail this frame: the rider on it rises too.</summary>
+	Vector3 RailLift { get; }
+
+	/// <summary>
+	/// Whether the rider's animation is still in a grind or slide this frame: a nose or tail slide's pitch (SlideTip) is
+	/// then held after the board leaves the rail, so the feet the slide's clip holds on the pitched nose or tail stay on it,
+	/// and eases out once the animation leaves the slide.
+	/// </summary>
+	void HoldSlidePitch( bool hold ) { }
+
+	/// <summary>The rails near the board (metres), for keeping the rider out of them.</summary>
+	System.Collections.Generic.IReadOnlyList<SkateMotion.Core.Grinding.RailSolid> RailSolids { get; }
+
 	/// <summary>Deck top and underside at a point of the shown deck's frame, or null off the deck.</summary>
 	(float Top, float Bottom)? DeckSurface( float x, float y );
 
@@ -25,4 +38,13 @@ internal interface IBoardDisplay
 
 	/// <summary>Each truck and wheel as a box in the shown deck's frame.</summary>
 	System.Collections.Generic.IReadOnlyList<BBox> PartBounds { get; }
+
+	/// <summary>
+	/// The physical pose as shown this frame with the deck's lean into a turn: what a rider standing on the deck is
+	/// carried by, so the rider leans with it.
+	/// </summary>
+	Transform RiddenTransform { get; }
+
+	/// <summary>The board's measured size: the rider's animation is fitted onto it.</summary>
+	SkateBoardDimensions Dimensions { get; }
 }

@@ -34,6 +34,9 @@ internal sealed class BlendNode
 
 	internal string Name { get; }
 
+	// The name as clip flags spell it (ClipFlags.Normalize), worked out once.
+	private string _flagName;
+
 	/// <summary>The clip this node plays when it is a leaf.</summary>
 	internal AnimationClip Clip { get; }
 
@@ -97,6 +100,32 @@ internal sealed class BlendNode
 		return _weights;
 	}
 
+	/// <summary>
+	/// Whether this node, or one it plays now with some weight (a blend's mixed children, a select's or switch's chosen
+	/// child, on down to its clips), is named <paramref name="flag"/>, spelled as <see cref="ClipFlags.Normalize"/> spells it.
+	/// </summary>
+	internal bool Plays( AnimationParameters parameters, string flag )
+	{
+		_flagName ??= ClipFlags.Normalize( Name ?? "" );
+		if ( _flagName == flag )
+			return true;
+		if ( Clip is not null )
+			return false;
+		switch ( _type )
+		{
+			case "select":
+				return _children[ Selected( parameters ) ].Plays( parameters, flag );
+			case "switch":
+				return _children[ Nearest( parameters ) ].Plays( parameters, flag );
+			default:
+			{
+				var (first, toward) = Between( parameters );
+				return (toward < 1f && _children[ first ].Plays( parameters, flag ))
+					|| (toward > 0f && _children[ first + 1 ].Plays( parameters, flag ));
+			}
+		}
+	}
+
 	/// <summary>Weighted length of the mixed clips, seconds.</summary>
 	internal float Duration( AnimationParameters parameters )
 	{
@@ -148,49 +177,60 @@ internal sealed class BlendNode
 		switch ( _type )
 		{
 			case "select":
-			{
-				var key = parameters.Text( _parameter );
-				var index = Array.FindIndex( _slots, slot => string.Equals( slot.Key, key, StringComparison.OrdinalIgnoreCase ) );
-				if ( index < 0 )
-					index = Array.FindIndex( _slots, slot => string.Equals( slot.Key, "DEFAULT", StringComparison.OrdinalIgnoreCase ) );
-				_children[ Math.Max( index, 0 ) ].Collect( parameters, weight, output );
+				_children[ Selected( parameters ) ].Collect( parameters, weight, output );
 				return;
-			}
 			case "switch":
-			{
-				var value = parameters.Number( _parameter );
-				var best = 0;
-				for ( var i = 1; i < _slots.Length; i++ )
-				{
-					if ( MathF.Abs( _slots[ i ].At - value ) < MathF.Abs( _slots[ best ].At - value ) )
-						best = i;
-				}
-				_children[ best ].Collect( parameters, weight, output );
+				_children[ Nearest( parameters ) ].Collect( parameters, weight, output );
 				return;
-			}
 			default:
 			{
-				var value = parameters.Number( _parameter );
-				if ( _slots.Length == 1 || value <= _slots[ 0 ].At )
-				{
-					_children[ 0 ].Collect( parameters, weight, output );
-					return;
-				}
-				for ( var i = 0; i < _slots.Length - 1; i++ )
-				{
-					if ( value > _slots[ i + 1 ].At )
-						continue;
-					var span = _slots[ i + 1 ].At - _slots[ i ].At;
-					var t = span > 0f ? (value - _slots[ i ].At) / span : 1f;
-					if ( t < 1f )
-						_children[ i ].Collect( parameters, weight * (1f - t), output );
-					if ( t > 0f )
-						_children[ i + 1 ].Collect( parameters, weight * t, output );
-					return;
-				}
-				_children[ ^1 ].Collect( parameters, weight, output );
+				var (first, toward) = Between( parameters );
+				if ( toward < 1f )
+					_children[ first ].Collect( parameters, weight * (1f - toward), output );
+				if ( toward > 0f )
+					_children[ first + 1 ].Collect( parameters, weight * toward, output );
 				return;
 			}
 		}
+	}
+
+	// A select's child: the one keyed by its text parameter, else the "DEFAULT" one, else the first.
+	private int Selected( AnimationParameters parameters )
+	{
+		var key = parameters.Text( _parameter );
+		var index = Array.FindIndex( _slots, slot => string.Equals( slot.Key, key, StringComparison.OrdinalIgnoreCase ) );
+		if ( index < 0 )
+			index = Array.FindIndex( _slots, slot => string.Equals( slot.Key, "DEFAULT", StringComparison.OrdinalIgnoreCase ) );
+		return Math.Max( index, 0 );
+	}
+
+	// A switch's child: the one placed nearest its numeric parameter.
+	private int Nearest( AnimationParameters parameters )
+	{
+		var value = parameters.Number( _parameter );
+		var best = 0;
+		for ( var i = 1; i < _slots.Length; i++ )
+		{
+			if ( MathF.Abs( _slots[ i ].At - value ) < MathF.Abs( _slots[ best ].At - value ) )
+				best = i;
+		}
+		return best;
+	}
+
+	// A blend's two children around its parameter: the first, and how far (0 to 1) toward the next one the mix lies; at
+	// or beyond either end, that end's child alone.
+	private (int First, float Toward) Between( AnimationParameters parameters )
+	{
+		var value = parameters.Number( _parameter );
+		if ( _slots.Length == 1 || value <= _slots[ 0 ].At )
+			return (0, 0f);
+		for ( var i = 0; i < _slots.Length - 1; i++ )
+		{
+			if ( value > _slots[ i + 1 ].At )
+				continue;
+			var span = _slots[ i + 1 ].At - _slots[ i ].At;
+			return (i, span > 0f ? (value - _slots[ i ].At) / span : 1f);
+		}
+		return (_slots.Length - 1, 0f);
 	}
 }

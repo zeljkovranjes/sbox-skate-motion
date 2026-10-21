@@ -55,6 +55,12 @@ internal sealed partial class ArticulatedBoard
 	}
 
 	internal ReadOnlySpan<DynamicBody> Bodies => _bodies.AsSpan( 0, DynamicCount );
+
+	/// <summary>Radius of the wheels (metres).</summary>
+	internal float WheelRadius => _radius;
+
+	/// <summary>The settings the board was built with, its measured geometry among them.</summary>
+	internal SkateSettings Settings => _settings;
 	internal ref readonly DynamicBody StaticMapBody => ref _bodies[ StaticMapBodyIndex ];
 	internal int ContactCount { get; private set; }
 	internal BoardTargetDrive TargetDrive { get; } = new();
@@ -131,7 +137,11 @@ internal sealed partial class ArticulatedBoard
 		var wheelMass = _settings.BoardMass * 0.025f;
 		var truckMass = _settings.BoardMass * 0.12f;
 		var deckMass = (attached ? _settings.Mass : _settings.BoardMass) - wheelMass * 4f - truckMass * 2f;
-		Configure( 0, deckMass, BoxInertia( deckMass, new Vector3( 0.8f, 0.22f, 0.025f ) ) );
+		// With a rider aboard the deck body carries the rider, and keeps the inertia the handling was measured with; a board
+		// on its own (dropped, carried, thrown, after a bail) turns as its own deck does, at the size it was measured.
+		var deckSize = attached ? RiddenDeck
+			: new Vector3( _settings.DeckCollisionLength, _settings.DeckWidth, _settings.DeckThickness );
+		Configure( 0, deckMass, BoxInertia( deckMass, deckSize ) );
 		for ( var i = 1; i < 3; i++ )
 			Configure( i, truckMass, BoxInertia( truckMass, new Vector3( 0.045f, _settings.Track, 0.025f ) ) );
 		var transverse = wheelMass * (3f * _radius * _radius + 0.035f * 0.035f) / 12f;
@@ -327,6 +337,9 @@ internal sealed partial class ArticulatedBoard
 		_bodies[ index ].WorldInverseInertia = Matrix4x4.Transpose( basis )
 			* Matrix4x4.CreateScale( _integration[ index ].LocalInverseInertia ) * basis;
 	}
+
+	// The box the deck body's inertia is taken from while it carries a rider (metres).
+	private static readonly Vector3 RiddenDeck = new( 0.8f, 0.22f, 0.025f );
 
 	private static Vector3 BoxInertia( float mass, Vector3 size ) => mass / 12f * new Vector3(
 		size.Y * size.Y + size.Z * size.Z,

@@ -1,4 +1,5 @@
 using Sandbox;
+using SkateMotion.Core.Grinding;
 
 namespace SkateMotion.Engine;
 
@@ -47,21 +48,39 @@ internal static class BoardGeometry
 	/// <param name="track">Axle length, metres.</param>
 	/// <param name="rise">Height from the axle up to the deck's underside, metres: the hanger, kingpin and baseplate
 	/// fill it so the wheels visibly hang from the deck.</param>
-	internal static Model Truck( float track, float rise )
+	/// <param name="baseplate">Draw the baseplate with the truck; without it, it is drawn on the deck (see <see cref="Baseplate"/>)
+	/// and leans with it.</param>
+	internal static Model Truck( float track, float rise, bool baseplate = true )
 	{
 		var vertices = new VertexBuffer();
 		vertices.Init( true );
 		var metal = new Color( 0.45f, 0.48f, 0.5f );
-		Box( vertices, new Vector3( 0f, 0f, 0f ), new Vector3( 0.025f, track, 0.02f ), metal );
-		if ( rise > 0.04f )
+		// The axle is drawn as thick as the hanger a rail contact rests on, so a grinding truck is drawn on the rail.
+		Box( vertices, new Vector3( 0f, 0f, 0f ), new Vector3( 0.025f, track, RailContacts.AxleRadius * 2f ), metal );
+		if ( rise > FullTruckRise )
 		{
 			Box( vertices, new Vector3( 0f, 0f, 0.012f ), new Vector3( 0.035f, track * 0.7f, 0.03f ), metal );
 			var column = rise - 0.008f - 0.027f;
 			Box( vertices, new Vector3( 0f, 0f, 0.027f + column * 0.5f ), new Vector3( 0.03f, 0.035f, column ),
 				new Color( 0.75f, 0.2f, 0.15f ) );
-			Box( vertices, new Vector3( 0f, 0f, rise - 0.004f ), new Vector3( 0.07f, 0.055f, 0.008f ), metal );
+			if ( baseplate )
+				Box( vertices, new Vector3( 0f, 0f, rise - 0.004f ), BaseplateSize, metal );
 		}
 		return Build( vertices, "Skate Motion truck" );
+	}
+
+	/// <summary>The trucks drawn with a deck rise at least this high (metres) have a hanger, kingpin and baseplate.</summary>
+	internal const float FullTruckRise = 0.04f;
+
+	private static readonly Vector3 BaseplateSize = new( 0.07f, 0.055f, 0.008f );
+
+	/// <summary>A truck's baseplate on its own, about its middle: fixed to the deck's underside, it leans with the deck.</summary>
+	internal static Model Baseplate()
+	{
+		var vertices = new VertexBuffer();
+		vertices.Init( true );
+		Box( vertices, Vector3.Zero, BaseplateSize, new Color( 0.45f, 0.48f, 0.5f ) );
+		return Build( vertices, "Skate Motion baseplate" );
 	}
 
 	private static void Box( VertexBuffer vertices, Vector3 center, Vector3 size, Color color ) =>
@@ -96,6 +115,11 @@ internal static class BoardGeometry
 		var bottom = CentreBottom + share * (rim - Thickness - CentreBottom);
 		return (top, bottom);
 	}
+
+	/// <summary>The generated deck's length, width and thickness (metres).</summary>
+	internal const float DeckLength = 2f * (HalfStraight + Radius);
+	internal const float DeckWidth = 2f * Radius;
+	internal const float DeckThickness = CentreTop - CentreBottom;
 
 	private const float HalfStraight = 0.29f;
 	private const float Radius = 0.11f;

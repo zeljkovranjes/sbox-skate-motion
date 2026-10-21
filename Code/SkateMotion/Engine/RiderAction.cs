@@ -6,5 +6,7 @@ internal enum RiderAction
 	Mount,
 	Dismount,
 	PickUp,
-	Drop
+	Drop,
+	Throw,
+	DropIn
 }

@@ -11,7 +11,9 @@ using Quaternion = System.Numerics.Quaternion;
 /// from rest, measured in the source root's frame, applied to its rest pose corrected toward the source's (so
 /// A-pose and T-pose rigs agree); limbs are then swung to point where the source limbs point. Target bone
 /// lengths are kept and the mapped root bone's position is scaled by the ratio of hip heights above the soles.
-/// Unmapped bones follow their parents. Output is in the clip frame (+X forward, +Y left, +Z up, ground at
+/// Source bones below a hand are fingers: they aim along their own finger only, never swinging the hand toward
+/// one, and where both hands have fingers the target hand is turned at rest to lie as the source hand does (from
+/// the wrist toward the knuckles, and along the knuckle line). Unmapped bones follow their parents. Output is in the clip frame (+X forward, +Y left, +Z up, ground at
 /// zero) in target units; <see cref="Facing"/> and <see cref="Ground"/> turn it back into the rig's model space.
 /// </summary>
 internal sealed class PoseRetargeter
@@ -26,6 +28,7 @@ internal sealed class PoseRetargeter
 	private readonly int[] _order;
 	private readonly int[] _mirror;
 	private readonly int[] _effectors;
+	private readonly bool[] _fingers;
 	private readonly int _anchor;
 	private readonly float _scale;
 	private readonly Vector3[] _restPositions;
@@ -56,6 +59,7 @@ internal sealed class PoseRetargeter
 		_correction = Enumerable.Repeat( Quaternion.Identity, targetNames.Length ).ToArray();
 		_map = targetNames.Select( name => map.TryGetValue( name, out var bone ) ? source.IndexOf( bone ) : -1 ).ToArray();
 		_order = Enumerable.Range( 0, targetNames.Length ).OrderBy( bone => Depth( targetParents, bone ) ).ToArray();
+		_fingers = Enumerable.Range( 0, source.Count ).Select( BelowHand ).ToArray();
 		_aim = Enumerable.Range( 0, targetNames.Length ).Select( AimChild ).ToArray();
 		_mirror = Enumerable.Range( 0, source.Count ).Select( bone => source.IndexOf( Swap( source.Names[ bone ] ) ) )
 			.Select( ( other, bone ) => other < 0 ? bone : other ).ToArray();
@@ -74,8 +78,9 @@ internal sealed class PoseRetargeter
 		_scale = sourceHeight > 0.0001f && bindPositions[ _anchor ].Z > 0.0001f ? bindPositions[ _anchor ].Z / sourceHeight : 1f;
 		// Rest correction: retarget the source rest pose once; whatever swing the aim step adds there is the
 		// difference between the two rest poses. Hands have no limb to aim and inherit their forearm's, so a
-		// hand stays straight on an arm rotated out of an A-pose; the head and other end bones keep their own
-		// rest orientation, since a neck's rest lean says nothing about where the face points.
+		// hand stays straight on an arm rotated out of an A-pose, and a fingertip inherits its finger's so it
+		// carries on along it; the head and other end bones keep their own rest orientation, since a neck's rest
+		// lean says nothing about where the face points.
 		var positions = new Vector3[ targetNames.Length ];
 		var rotations = new Quaternion[ targetNames.Length ];
 		var rest = new SkeletonPose( source.Count );
@@ -89,8 +94,17 @@ internal sealed class PoseRetargeter
 			var parent = _targetParents[ bone ];
 			if ( _aim[ bone ] >= 0 || parent < 0 )
 				_correction[ bone ] = Quaternion.Normalize( rotations[ bone ] * Quaternion.Conjugate( _bindRotations[ bone ] ) );
-			else if ( source.Names[ _map[ bone ] ].EndsWith( "hand", StringComparison.OrdinalIgnoreCase ) )
+			else if ( source.Names[ _map[ bone ] ].EndsWith( "hand", StringComparison.OrdinalIgnoreCase ) || _fingers[ _map[ bone ] ] )
 				_correction[ bone ] = Quaternion.Normalize( rotations[ parent ] * Quaternion.Conjugate( _bindRotations[ parent ] ) );
+		}
+		// A hand's rest bend and roll on its forearm differ between rigs, and nothing aims a hand; with fingers on both
+		// sides the hand's own frame is known, so the target hand is turned onto the source's. The fingers' corrections
+		// are their own (they aim), so they are unaffected.
+		foreach ( var bone in _order )
+		{
+			if ( _map[ bone ] >= 0 && _aim[ bone ] < 0 && source.Names[ _map[ bone ] ].EndsWith( "hand", StringComparison.OrdinalIgnoreCase )
+				&& HandFrame( bone ) is { } turn )
+				_correction[ bone ] = turn;
 		}
 	}
 
@@ -251,7 +265,8 @@ internal sealed class PoseRetargeter
 		rotations[ bone ] = Quaternion.Normalize( Between( current, wanted ) * rotations[ bone ] );
 	}
 
-	// The mapped child that continues this bone's chain: the one whose source bone comes first.
+	// The mapped child that continues this bone's chain: the one whose source bone comes first. A finger continues
+	// only a finger, so a hand is never aimed at one of its fingers.
 	private int AimChild( int bone )
 	{
 		if ( _map[ bone ] < 0 )
@@ -259,12 +274,68 @@ internal sealed class PoseRetargeter
 		var best = -1;
 		for ( var child = 0; child < _targetParents.Length; child++ )
 		{
-			if ( _targetParents[ child ] != bone || _map[ child ] < 0 || !SourceDescends( _map[ child ], _map[ bone ] ) )
+			if ( _targetParents[ child ] != bone || _map[ child ] < 0 || !SourceDescends( _map[ child ], _map[ bone ] )
+				|| _fingers[ _map[ child ] ] && !_fingers[ _map[ bone ] ] )
 				continue;
 			if ( best < 0 || _map[ child ] < _map[ best ] )
 				best = child;
 		}
 		return best;
+	}
+
+	// The rest turn taking a target hand's frame onto its source hand's: the direction from the wrist to its fingers'
+	// first joints, and the line across those joints from the first finger to the last (thumbs left out), measured
+	// from the target's bind and the source's rest. Null without two such fingers on both.
+	private Quaternion? HandFrame( int hand )
+	{
+		var joints = new List<int>();
+		for ( var bone = 0; bone < _map.Length; bone++ )
+		{
+			var source = _map[ bone ];
+			if ( source < 0 || !_fingers[ source ] || _source.Names[ source ].Contains( "thumb", StringComparison.OrdinalIgnoreCase ) )
+				continue;
+			var parent = _source.Parents[ source ];
+			if ( parent == _map[ hand ] || parent >= 0 && _source.Parents[ parent ] == _map[ hand ]
+				&& _source.Names[ parent ].EndsWith( "base", StringComparison.OrdinalIgnoreCase ) )
+				joints.Add( bone );
+		}
+		if ( joints.Count < 2 )
+			return null;
+		joints.Sort( ( a, b ) => _map[ a ].CompareTo( _map[ b ] ) );
+		Vector3 Middle( System.Func<int, Vector3> at ) => joints.Aggregate( Vector3.Zero, ( sum, bone ) => sum + at( bone ) ) / joints.Count;
+		var target = Basis( Middle( bone => _bindPositions[ bone ] ) - _bindPositions[ hand ],
+			_bindPositions[ joints[ ^1 ] ] - _bindPositions[ joints[ 0 ] ] );
+		var rest = Basis( Middle( bone => _restPositions[ _map[ bone ] ] ) - _restPositions[ _map[ hand ] ],
+			_restPositions[ _map[ joints[ ^1 ] ] ] - _restPositions[ _map[ joints[ 0 ] ] ] );
+		if ( target is not { } from || rest is not { } to )
+			return null;
+		return Quaternion.Normalize( to * Quaternion.Conjugate( from ) );
+	}
+
+	// The rotation whose X axis runs along a direction and whose Y axis lies toward a second one, or null.
+	private static Quaternion? Basis( Vector3 along, Vector3 toward )
+	{
+		if ( along.LengthSquared() < 1e-12f )
+			return null;
+		var x = Vector3.Normalize( along );
+		var y = toward - x * Vector3.Dot( toward, x );
+		if ( y.LengthSquared() < 1e-12f )
+			return null;
+		y = Vector3.Normalize( y );
+		var z = Vector3.Cross( x, y );
+		return Quaternion.Normalize( Quaternion.CreateFromRotationMatrix( new System.Numerics.Matrix4x4(
+			x.X, x.Y, x.Z, 0f, y.X, y.Y, y.Z, 0f, z.X, z.Y, z.Z, 0f, 0f, 0f, 0f, 1f ) ) );
+	}
+
+	// Whether a source bone hangs below a hand (a finger).
+	private bool BelowHand( int bone )
+	{
+		for ( bone = _source.Parents[ bone ]; bone >= 0; bone = _source.Parents[ bone ] )
+		{
+			if ( _source.Names[ bone ].EndsWith( "hand", StringComparison.OrdinalIgnoreCase ) )
+				return true;
+		}
+		return false;
 	}
 
 	private bool SourceDescends( int bone, int ancestor )

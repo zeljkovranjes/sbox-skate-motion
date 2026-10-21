@@ -62,7 +62,8 @@ internal sealed class SkateTricks
 	}
 
 	// Rolling the stick sideways while flicking adds board spin: more than one stick-width of travel turns a
-	// flip into a varial (or hardflip/inward heelflip by direction), more than 2.2 into the 360 version.
+	// flip into a varial (or hardflip/inward heelflip by direction), more than 2.2 into the 360 version: a 360 flip
+	// or 360 hardflip, a laser flip or 360 inward heelflip.
 	private static TrickKind WithSpin( TrickKind trick, float sweep, bool frontside )
 	{
 		var full = sweep > 2.2f;
@@ -71,9 +72,9 @@ internal sealed class SkateTricks
 		{
 			TrickKind.Shuvit => full ? (frontside ? TrickKind.FrontsideShuvit360 : TrickKind.Shuvit360)
 				: frontside ? TrickKind.FrontsideShuvit : TrickKind.Shuvit,
-			TrickKind.Kickflip when full => TrickKind.Treflip,
+			TrickKind.Kickflip when full => frontside ? TrickKind.Hardflip360 : TrickKind.Treflip,
 			TrickKind.Kickflip when half => frontside ? TrickKind.Hardflip : TrickKind.VarialKickflip,
-			TrickKind.Heelflip when full => TrickKind.Laserflip,
+			TrickKind.Heelflip when full => frontside ? TrickKind.Laserflip : TrickKind.InwardHeelflip360,
 			TrickKind.Heelflip when half => frontside ? TrickKind.VarialHeelflip : TrickKind.InwardHeelflip,
 			_ => trick
 		};

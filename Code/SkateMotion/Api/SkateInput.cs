@@ -17,4 +17,16 @@ public readonly record struct SkateInput(
 
 	/// <summary>Hold to crouch for a hippy jump; letting go jumps the rider off the board while it rolls on beneath.</summary>
 	public bool HippyJump { get; init; }
+
+	/// <summary>The catch button. In the air with a grab it takes the feet off the board (a christ air, superman or
+	/// no-foot air); during a flip it catches the board dark side up. It changes the rider's animation only.</summary>
+	public bool Catch { get; init; }
+
+	/// <summary>Feet taken off the board in the air, named as the push buttons are (left push, right push): one-foot
+	/// airs. It changes the rider's animation only.</summary>
+	public SkatePushFeet FeetOff { get; init; }
+
+	/// <summary>The hand plant button. Off the lip of a steep ramp it plants a hand on the lip: the rider stalls upside
+	/// down over it, the board held up, while it is held, and drops back in when it is let go.</summary>
+	public bool HandPlant { get; init; }
 }

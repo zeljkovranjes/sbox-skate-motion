@@ -44,6 +44,12 @@ internal sealed class AnimationGraphDefinition
 	/// <summary>Hand role holding the authored board, "left_hand" or "right_hand". Empty keeps the fallback carry pose.</summary>
 	public string CarryHand { get; set; } = "";
 
+	/// <summary>Size of the board the clips were made on; empty keeps the default board's (see <see cref="BoardFit"/>).</summary>
+	public ClipBoardDefinition Board { get; set; }
+
+	/// <summary>Optional finger pose banks, one per hand, driven by per-clip streams (see <see cref="HandPoseLayer"/>).</summary>
+	public List<HandPoseDefinition> HandPoses { get; set; } = new();
+
 	/// <summary>
 	/// Clips that turn the rider round to ride switch (the other foot forward, the board's tail leading). Each start of
 	/// one swaps the rider's stance; the clips that follow it play mirrored and facing the other way. Empty disables

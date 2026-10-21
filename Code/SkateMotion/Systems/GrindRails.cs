@@ -14,6 +14,7 @@ public sealed class GrindRails : GameObjectSystem<GrindRails>
 	private GrindEdgeChunk[] _chunks = Array.Empty<GrindEdgeChunk>();
 	private readonly GrindEdgeLookup _lookup = new();
 	private readonly GrindEdgeRecord[] _records = new GrindEdgeRecord[ GrindEdgeQuery.Capacity ];
+	private readonly List<RailSolid> _solids = new();
 
 	/// <summary>Creates the scene's rail registry.</summary>
 	public GrindRails( Scene scene ) : base( scene )
@@ -27,6 +28,26 @@ public sealed class GrindRails : GameObjectSystem<GrindRails>
 	}
 
 	internal void Remove( GrindRail rail ) => _rails.Remove( rail );
+
+	/// <summary>Replaces <paramref name="output"/> with the solids (metres) of rails within radius inches of center.</summary>
+	internal void CollectSolids( Vector3 center, float radius, List<RailSolid> output )
+	{
+		output.Clear();
+		var near = SkateUnits.Metres( center );
+		var reach = radius / SkateUnits.InchesPerMetre;
+		foreach ( var rail in _rails )
+		{
+			if ( !rail.IsValid() )
+				continue;
+			_solids.Clear();
+			rail.CollectSolids( _solids );
+			foreach ( var solid in _solids )
+			{
+				if ( solid.IsValid && solid.Distance( near ) <= reach )
+					output.Add( solid );
+			}
+		}
+	}
 
 	/// <summary>Collects filtered rail segments in a box extending radius inches from center.</summary>
 	internal int Collect( Vector3 center, float radius, Span<RailSegment> output )

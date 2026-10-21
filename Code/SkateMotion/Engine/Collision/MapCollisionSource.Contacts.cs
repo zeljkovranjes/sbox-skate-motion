@@ -19,8 +19,10 @@ internal sealed partial class MapCollisionSource
 	// How far, in metres, a centre may sit behind a face it is resting against before that face counts as behind it.
 	private const float BehindTolerance = 0.01f;
 
+	/// <param name="skip">Shapes the board does not collide with this step, or null.</param>
 	internal int GenerateContacts( ReadOnlyMemory<CollisionMapBodyInput> bodies,
-		Func<PhysicsShape, CollisionMapContactContext?> binding, ICollisionContactCollector collector )
+		Func<PhysicsShape, CollisionMapContactContext?> binding, ICollisionContactCollector collector,
+		Func<PhysicsShape, bool> skip = null )
 	{
 		ArgumentNullException.ThrowIfNull( binding );
 		ArgumentNullException.ThrowIfNull( collector );
@@ -34,6 +36,7 @@ internal sealed partial class MapCollisionSource
 		{
 			var instance = _instances[ shape ];
 			if ( instance.Geometry.Triangles.Length == 0 ) continue;
+			if ( skip is not null && skip( _ordered[ shape ].Shape ) ) continue;
 			var context = binding( _ordered[ shape ].Shape );
 			if ( !context.HasValue ) continue;
 			var queue = new CollisionMapTriangleQueue( bodies, context.Value, collector );

@@ -13,5 +13,11 @@ public enum SkateAirGrab
 	Melon,
 	Method,
 	Japan,
-	Stiffy
+	Stiffy,
+	/// <summary>Back hand on the toe edge: the frontside grab.</summary>
+	Indy,
+	/// <summary>Back hand on the nose.</summary>
+	NoseCrail,
+	/// <summary>Both hands on the nose, the board pulled up the body.</summary>
+	RocketAir
 }

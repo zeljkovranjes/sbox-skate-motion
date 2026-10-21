@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace SkateMotion.Core.Animation;
 
 /// <summary>Immutable clip identity and ordered attribute records, including an explicitly empty table.</summary>
@@ -27,4 +29,22 @@ internal sealed class AnimationClipAttributeSet
 	internal string Name { get; }
 	internal ReadOnlySpan<uint> NameWords => _nameWords;
 	internal ReadOnlySpan<AnimationClipAttribute> Records => _records;
+
+	private Dictionary<string, (float Start, float End)> _windows;
+
+	/// <summary>The window (fractions of the clip; -1 for all of it) of the first attribute whose name, without dashes or
+	/// underscores, is <paramref name="name"/>.</summary>
+	internal bool TryWindow( string name, out float start, out float end )
+	{
+		if ( _windows is null )
+		{
+			var windows = new Dictionary<string, (float Start, float End)>( StringComparer.Ordinal );
+			foreach ( var record in _records )
+				windows.TryAdd( ClipFlags.Normalize( record.Name.Decode() ), (record.Start, record.End) );
+			_windows = windows;
+		}
+		var found = _windows.TryGetValue( name, out var window );
+		(start, end) = window;
+		return found;
+	}
 }

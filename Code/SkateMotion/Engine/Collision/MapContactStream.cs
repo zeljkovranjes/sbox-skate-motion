@@ -51,10 +51,11 @@ internal sealed class MapContactStream
 		_state[ 0x328c / 4 ] = 0x01000000u | (_deferredReduction ? 0x00010000u : 0u);
 	}
 
-	internal void Generate( ReadOnlyMemory<CollisionMapBodyInput> bodies )
+	/// <param name="skip">Shapes the board does not collide with this step, or null.</param>
+	internal void Generate( ReadOnlyMemory<CollisionMapBodyInput> bodies, Func<PhysicsShape, bool> skip = null )
 	{
 		Reset();
-		TriangleCount = _source.GenerateContacts( bodies, _trackedBinding, _collector );
+		TriangleCount = _source.GenerateContacts( bodies, _trackedBinding, _collector, skip );
 		_collector.Flush();
 	}
 

@@ -7,6 +7,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- Allocation tests count bytes on their own thread: methods compiled again at a higher tier part way through a
+         run (sooner or later under the parallel test load) would be counted as allocations. -->
+    <TieredCompilation>false</TieredCompilation>
   </PropertyGroup>
 
   <ItemGroup>

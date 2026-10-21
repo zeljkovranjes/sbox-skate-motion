@@ -31,6 +31,14 @@ internal sealed class RiderAnimator
 	private readonly GameObject _board;
 	private ClipRiderAnimation _clips;
 	private SkateTrick _trick;
+
+	// Whether the trick under way, and the one just landed, were popped off the nose (their nollie versions).
+	private bool _trickNose;
+
+	// The stick has not come back to the middle since the last pop.
+	private bool _windupSpent;
+	private int _windupSide;
+	private bool _landedNose;
 	private float _sincePop = 10f;
 	private float _sinceLanding = 10f;
 	private float _rebound;
@@ -40,17 +48,51 @@ internal sealed class RiderAnimator
 	// How fast (per second) board-derived animation inputs follow the board.
 	private const float InputSmoothing = 15f;
 
-	// Shortly after a landing a rocking board can lift every wheel for a moment; that only counts as leaving the
-	// ground again once it lasts, unless the rider popped again.
-	private const float ReboundWindow = 0.35f;
+	// Every wheel can lift for a moment without the rider leaving the ground (a board rocking after a landing, a hop
+	// where the floor meets a ramp): air the rider did not pop into only counts once it lasts.
 	private const float ReboundHold = 0.1f;
 	private float _landingSpeed;
 	private float _windup;
 	private bool _highPop;
 	private Rotation _rootRotation = Rotation.Identity;
+
+	// Stepping off a tilted or turned-over board (along a wall, in a body flip) the body comes upright at this rate (per
+	// second) instead of in one frame; the turn still to go, and what the last root was for.
+	private const float UprightRate = 8f;
+	private Rotation _uprightTurn = Rotation.Identity;
+	private RiderActivity _rootActivity;
 	private SkateInput _lastInput;
 	private SkateTrick _landedTrick;
 	private string _plant;
+
+	// A hand plant: how long the hand has been planted (or since it let go), and which way it turns the rider.
+	private bool _planting;
+	private float _plantPart = 10f;
+	private bool _plantFrontside = true;
+
+	// Seconds a hand plant plays its way in, and its way out after it lets go.
+	private const float PlantInto = 0.3f;
+	private const float PlantOut = 0.5f;
+
+	// The hand plant's part under way (see RiderAnimationInput.Handplant): it turns the way the rider steers as it plants,
+	// frontside with no steering.
+	private string HandplantPart( bool planted, float steer, float delta )
+	{
+		if ( planted != _planting )
+		{
+			_planting = planted;
+			_plantPart = 0f;
+			if ( planted )
+				_plantFrontside = steer >= 0f;
+		}
+		else
+		{
+			_plantPart += delta;
+		}
+		if ( planted )
+			return _plantPart < PlantInto ? "into" : "cycle";
+		return _plantPart < PlantOut ? "out" : null;
+	}
 	private string _catchStyle;
 	private string _lateTrick;
 	private bool _lateArmed;
@@ -97,21 +139,74 @@ internal sealed class RiderAnimator
 	internal bool Switch => _clips?.Switch ?? false;
 	internal string ClipState => _clips?.State;
 	internal Transform? CarriedBoardPose => _clips?.CarriedBoardPose;
+
+	/// <summary>
+	/// Where the rider stands at a drop-in's lip, facing over it, while it drops in (null otherwise): the board the clips set
+	/// down there lies where they have it against where their skater stands.
+	/// </summary>
+	internal Transform? BoardRestFrame
+	{
+		get => _clips?.BoardRestFrame;
+		set
+		{
+			if ( _clips is not null )
+				_clips.BoardRestFrame = value;
+		}
+	}
+
+	/// <summary>How far through its own travel the playing clip is (0 to 1), or null for a clip that does not travel.</summary>
+	internal float? ClipTravel => _clips?.TravelProgress;
+
+	/// <summary>While a landing on foot plays, how its clip's root travels (inches per second, world); null otherwise.</summary>
+	internal Vector3? LandingTravel => _clips?.LandingTravel;
+
+	/// <summary>Where the playing clip's root is against where its skater stands by the board (inches), or null.</summary>
+	internal Vector3? ClipTravelOffset => _clips?.TravelOffset;
+
 	internal float? FootDeckGap => _clips?.FootDeckGap;
+	internal float?[] SoleDeckGaps => _clips?.SoleDeckGaps;
+	internal float?[] ClipToeHeights => _clips?.ClipToeHeights;
 	internal float? HandDeckGap( Transform board ) => _clips?.HandDeckGap( board );
 
 	/// <summary>Whether a foot is planted on the ground (pushing) in the animation, or null without clips.</summary>
 	internal bool? PushContact => _clips?.FootOnGround;
+
+	/// <summary>True while the animation holds the board dark side up.</summary>
+	internal bool DarkSideUp => _clips?.Dark ?? false;
+
+	/// <summary>The graph has the board dark side up on the ground (see <see cref="ClipRiderAnimation.DarkOnGround"/>).</summary>
+	internal bool DarkOnGround => _clips?.DarkOnGround ?? false;
+
+	/// <summary>The lip of the board's last hand plant, for the planting hand.</summary>
+	internal Vector3? PlantLip
+	{
+		get => _clips?.PlantLip;
+		set
+		{
+			if ( _clips is not null )
+				_clips.PlantLip = value;
+		}
+	}
 	internal BoardRetrievalProfile RetrievalProfile => _clips?.RetrievalProfile;
 	internal bool RetrieveRequested => _clips?.RetrieveRequested ?? false;
+
+	/// <summary>True once a drop or throw playing has reached the moment its hand lets go of the board.</summary>
+	internal bool BoardReleased => _clips?.BoardReleased ?? false;
+
+	/// <summary>How far the rider should turn (degrees, left positive) for a reach to cover the board being picked up.</summary>
+	internal float ReachTurn => _clips?.ReachTurn ?? 0f;
+
+	/// <summary>The board-handling motion playing over the body (a reach, drop or throw), or null.</summary>
+	internal string HandlingMotion => _clips?.HandlingMotion;
+
 	internal GameObject Visual => _visual;
 
 	/// <summary>Smooths the rider's fixed-step movement for the animation root.</summary>
 	internal StepSmoother Smoother { get; } = new();
 
-	// The board's physical pose as shown this frame.
+	// The board's physical pose as shown this frame, leaning into a turn as the deck does.
 	private Transform BoardShown => (_display ??= _board.Components.GetAll<Component>( FindMode.EverythingInSelf )
-		.OfType<IBoardDisplay>().FirstOrDefault())?.RenderTransform ?? _board.WorldTransform;
+		.OfType<IBoardDisplay>().FirstOrDefault())?.RiddenTransform ?? _board.WorldTransform;
 
 	private IBoardDisplay _display;
 
@@ -166,9 +261,14 @@ internal sealed class RiderAnimator
 	internal IReadOnlyList<string> Actions( string family, string style ) =>
 		_clips?.Actions( family, style ) ?? System.Array.Empty<string>();
 
-	internal void OnTrick( SkateTrick trick )
+	internal void OnTrick( SkateTrick trick ) => OnTrick( trick, false );
+
+	/// <summary>A trick popped, <paramref name="nose"/> when off the nose (a nollie version).</summary>
+	internal void OnTrick( SkateTrick trick, bool nose )
 	{
 		_trick = trick;
+		_trickNose = nose;
+		_windupSpent = true;
 		_sincePop = 0f;
 		_airTime = 0f;
 		// A longer windup charges a higher pop; a grab held at the pop plants a foot; braking hops off the board.
@@ -183,6 +283,8 @@ internal sealed class RiderAnimator
 		_catchStyle = !flips ? null : _lastInput.Slide ? "darkcatch" : _lastInput.Gesture ? "underflip"
 			: _airTime > 1.3f ? "quadflip" : null;
 		_landedTrick = _trick;
+		_landedNose = _trickNose;
+		_trickNose = false;
 		_landingKind = LandingKind( BoardShown.Rotation, _lastVelocity, _takeoffYaw );
 		_trick = SkateTrick.None;
 		_lateTrick = null;
@@ -193,16 +295,37 @@ internal sealed class RiderAnimator
 	/// <summary>Plays clips for this frame; returns false when the built-in animation should run instead.</summary>
 	internal bool UpdateClips( RiderActivity activity, SkateState board, SkateInput input, Vector3 velocity, bool goofy,
 		string style, float delta, string objectMotion = null, string objectHeight = null, bool skitching = false,
-		float moveAmount = 0f, bool holdingBoard = false, HippyJump hippy = null )
+		float moveAmount = 0f, bool holdingBoard = false, HippyJump hippy = null, bool runout = false, string groundSlope = null,
+		float edgeDistance = float.PositiveInfinity, bool mountHeld = false, bool droppingIn = false )
 	{
 		_hippyJump = hippy;
 		_sincePop += delta;
 		_sinceLanding += delta;
 		_lastInput = input;
 		_rebound = board.IsAirborne ? _rebound + delta : 0f;
-		var airborne = board.IsAirborne
-			&& (_sinceLanding > ReboundWindow || _rebound > ReboundHold || _sincePop < _sinceLanding);
-		_windup = input.FlickY < -0.6f && !airborne ? _windup + delta : 0f;
+		var airborne = board.IsAirborne && (_rebound > ReboundHold || _sincePop < _sinceLanding);
+		// Riding, the rider's footing is the board's: stepping off, it starts from there (on the ground for a runout) rather
+		// than from wherever it last walked.
+		if ( activity == RiderActivity.Riding )
+			_onGround = !airborne;
+		// A wind-up is the stick held toward one end from the middle. The flick that lets it go swings the stick to the
+		// other end, and a stick left at the end of a flick, is no new wind-up: one starts again once the stick has come
+		// back to the middle.
+		if ( MathF.Abs( input.FlickY ) < 0.15f )
+		{
+			_windupSpent = false;
+			_windupSide = 0;
+		}
+		else if ( MathF.Abs( input.FlickY ) > 0.6f )
+		{
+			var side = MathF.Sign( input.FlickY );
+			if ( _windupSide == 0 )
+				_windupSide = side;
+			else if ( side != _windupSide )
+				_windupSpent = true;
+		}
+		var winding = MathF.Abs( input.FlickY ) > 0.6f && !airborne && !_windupSpent;
+		_windup = winding ? _windup + delta : 0f;
 		if ( board.IsAirborne && !_wasAirborne )
 			_takeoffYaw = BoardShown.Rotation.Yaw();
 		_wasAirborne = board.IsAirborne;
@@ -232,8 +355,14 @@ internal sealed class RiderAnimator
 		ClearHelperIk();
 		var deck = boardShown.Rotation;
 		var landed = _sinceLanding < 0.35f;
-		var timeToLand = board.IsAirborne ? TimeToLand( boardShown.Position, velocity.z / SkateUnits.InchesPerMetre ) : 0f;
+		// On foot the time to land is the rider's own, from where it is and how fast it rises.
+		var timeToLand = activity == RiderActivity.Riding
+			? board.IsAirborne ? TimeToLand( boardShown.Position, velocity.z / SkateUnits.InchesPerMetre ) : 0f
+			: !_onGround ? TimeToLand( _rider.WorldPosition, velocity.z / SkateUnits.InchesPerMetre ) : 0f;
 		var trick = landed ? _landedTrick : _trick;
+		// The grind as named from its lock-on (a board shown for another machine has only the contacts' kind).
+		var named = board.NamedGrind != SkateGrind.None;
+		var grind = HeldGrind( named ? board.NamedGrind : board.Grind, delta );
 		var snapshot = new RiderAnimationInput
 		{
 			Activity = activity,
@@ -251,22 +380,39 @@ internal sealed class RiderAnimator
 			SlideSide = board.PowerSlide,
 			Reverting = board.Reverting,
 			Pumping = input.Pump,
-			Windup = input.FlickY < -0.6f && !airborne ? -input.FlickY : 0f,
+			Windup = winding ? MathF.Abs( input.FlickY ) : 0f,
+			WindupNose = winding && input.FlickY > 0f,
+			WindupSpin = winding ? input.FlickX * (goofy ? -1f : 1f) : 0f,
+			TweakX = airborne && input.Grab != SkateAirGrab.None ? input.FlickX * (goofy ? -1f : 1f) : 0f,
+			TweakY = airborne && input.Grab != SkateAirGrab.None ? input.FlickY : 0f,
+			AirStickX = airborne ? input.FlickX * (goofy ? -1f : 1f) : 0f,
+			AirStickY = airborne ? input.FlickY : 0f,
+			Catch = input.Catch,
+			FeetOff = (int)input.FeetOff,
+			FlipHeld = airborne && FlipHeld( trick, input.FlickX * (goofy ? -1f : 1f) ),
 			Balance = board.Balance == SkateBalanceMode.Manual ? 1 : board.Balance == SkateBalanceMode.NoseManual ? 2 : 0,
-			Grind = GrindName( board.Grind ),
+			Grind = GrindName( grind ),
+			GrindFrontside = GrindFrontside( board, grind ),
+			GrindNoseToHeels = GrindNoseToHeels( board, grind ),
+			GrindBackward = named ? board.NamedBackward : board.GrindBackward,
+			GrindTwisted = named ? board.NamedTwisted : board.GrindTwisted,
+			GrindLow = named ? board.NamedLow : board.GrindLow,
+			GrindOnLedgeTop = named ? board.NamedOnLedgeTop : board.GrindOnLedgeTop,
 			Trick = TrickName( trick ),
-			TrickNollie = trick == SkateTrick.Nollie,
+			TrickNollie = trick == SkateTrick.Nollie || trick != SkateTrick.None && (landed ? _landedNose : _trickNose),
 			TrickFlips = Flips( trick ),
 			HighPop = _highPop,
 			// A grab still held as the board comes down lets go in time for its release to bring the board back underfoot.
-			Grab = airborne && timeToLand > 0f && timeToLand < GrabRelease ? null : GrabName( input.Grab ),
+			Grab = LetGoForLanding( airborne, timeToLand, input.Grab != SkateAirGrab.None ) ? null : GrabName( input.Grab ),
 			TimeToLand = timeToLand,
 			Plant = _plant,
 			LateTrick = _lateTrick,
+			LateBackFoot = _lateBack,
+			LateFrontside = _lateFrontside,
 			CatchStyle = landed ? _catchStyle : null,
 			// Grabbing with brake held plants a hand, unless it is leaning back into a body flip.
-			Handplant = airborne && input.Brake > 0.5f && input.Grab != SkateAirGrab.None && board.BodyFlip == 0
-				? HandplantName( input.Grab ) : null,
+			Handplant = HandplantPart( board.HandPlanting, input.Steer * (goofy ? -1f : 1f), delta ),
+			HandplantFrontside = _plantFrontside,
 			OneFoot = input.Gesture && airborne,
 			Gesturing = input.Gesture,
 			Adjust = airborne && MathF.Abs( input.FlickY ) is > 0.2f and < 0.6f ? -input.FlickY : 0f,
@@ -296,7 +442,12 @@ internal sealed class RiderAnimator
 			OffBoardHeight = hippy?.Offset.Z ?? 0f,
 			OffBoardSpeed = hippy?.VerticalSpeed ?? 0f,
 			OverBoard = hippy?.OverBoard ?? true,
-			TimeToLandOnBoard = hippy?.TimeToLand ?? 0f
+			TimeToLandOnBoard = hippy?.TimeToLand ?? 0f,
+			Runout = runout,
+			GroundSlope = groundSlope,
+			EdgeDistance = edgeDistance,
+			MountHeld = mountHeld,
+			DroppingIn = droppingIn
 		};
 		_clips.Update( snapshot, delta, Root( activity, board, delta ) );
 		return true;
@@ -325,17 +476,43 @@ internal sealed class RiderAnimator
 			_lateArmed = false;
 			return;
 		}
-		if ( input.FlickY < -0.65f )
+		// Pulled back and flicked forward the front foot flicks the board; pushed forward and pulled back, the back foot.
+		// Flicked to a side it flips (a kickflip or heelflip for the stance); straight, it shoves the board round the
+		// way the stick swept on the way.
+		var stance = input.Goofy ? -1f : 1f;
+		if ( MathF.Abs( input.FlickY ) > 0.65f && !_lateArmed )
+		{
 			_lateArmed = true;
-		else if ( _lateArmed && input.FlickY > 0.35f )
+			_lateBack = input.FlickY > 0f;
+			_lateSweep = 0f;
+		}
+		else if ( _lateArmed && (_lateBack ? input.FlickY < -0.35f : input.FlickY > 0.35f) )
 		{
 			_lateArmed = false;
-			_lateTrick = input.FlickX < -0.3f ? "kickflip" : input.FlickX > 0.3f ? "heelflip" : _highPop ? "shuvit-high" : "shuvit-low";
+			var side = input.FlickX * stance;
+			_lateTrick = side < -0.3f ? "kickflip" : side > 0.3f ? "heelflip" : _highPop ? "shuvit-high" : "shuvit-low";
+			_lateFrontside = _lateSweep * stance > 0f;
 			_lateTime = 0.6f;
 		}
+		if ( _lateArmed && MathF.Abs( input.FlickX ) > MathF.Abs( _lateSweep ) )
+			_lateSweep = input.FlickX;
 	}
 
-	private static bool Flips( SkateTrick trick ) => trick is not (SkateTrick.None or SkateTrick.Ollie or SkateTrick.Nollie);
+	// The foot that flicked the late trick (the back one off the nose), and for a shove which way the stick swept.
+	private bool _lateBack;
+	private bool _lateFrontside;
+	private float _lateSweep;
+
+	// A kickflip (or heelflip) still held toward the side it was flicked to keeps turning.
+	private static bool FlipHeld( SkateTrick trick, float side ) => trick switch
+	{
+		SkateTrick.Kickflip => side < -0.3f,
+		SkateTrick.Heelflip => side > 0.3f,
+		_ => false
+	};
+
+	private static bool Flips( SkateTrick trick ) =>
+		trick is not (SkateTrick.None or SkateTrick.Ollie or SkateTrick.Nollie or SkateTrick.Plant);
 
 	private static string PlantName( SkateAirGrab grab ) => grab switch
 	{
@@ -343,18 +520,6 @@ internal sealed class RiderAnimator
 		SkateAirGrab.Crail => "nocomply",
 		SkateAirGrab.Tail or SkateAirGrab.Stale or SkateAirGrab.Method => "fastplant",
 		_ => "boneless"
-	};
-
-	private static string HandplantName( SkateAirGrab grab ) => grab switch
-	{
-		SkateAirGrab.Nose => "nosebone",
-		SkateAirGrab.Tail => "tailbone",
-		SkateAirGrab.Mute or SkateAirGrab.Method => "method",
-		SkateAirGrab.Stale or SkateAirGrab.Stiffy => "stiffy",
-		SkateAirGrab.Melon => "judo",
-		SkateAirGrab.Japan => "crossbone",
-		SkateAirGrab.Seatbelt => "tuck-knee",
-		_ => ""
 	};
 
 	// Clips are authored in the board's travel frame. On the ground that frame follows the deck surface; in the
@@ -366,9 +531,14 @@ internal sealed class RiderAnimator
 		if ( activity != RiderActivity.Riding )
 		{
 			var shown = Smoother.At( _rider.WorldTransform, Time.Now );
-			_rootRotation = shown.Rotation;
+			if ( activity == RiderActivity.Dismounting && _rootActivity == RiderActivity.Riding )
+				_uprightTurn = _rootRotation * shown.Rotation.Inverse;
+			_rootActivity = activity;
+			_uprightTurn = Rotation.Slerp( _uprightTurn, Rotation.Identity, 1f - MathF.Exp( -UprightRate * delta ) );
+			_rootRotation = _uprightTurn * shown.Rotation;
 			return new Transform( shown.Position, _rootRotation );
 		}
+		_rootActivity = activity;
 		var boardShown = BoardShown;
 		var deck = boardShown.Rotation;
 		// Off the board in a hippy jump the body follows its own flight above the board rolling beneath.
@@ -380,7 +550,9 @@ internal sealed class RiderAnimator
 		// Turning over in a body flip the rider is carried round with the board, never trailing it.
 		_rootRotation = board.BodyFlip != 0 && _clips is not null ? target
 			: Rotation.Slerp( _rootRotation, target, 1f - MathF.Exp( -12f * delta ) );
-		return new Transform( boardShown.Position + flight, _rootRotation );
+		// Raised with the shown board out of a rail, the rider stays standing on it.
+		var lift = _display?.RailLift ?? Vector3.Zero;
+		return new Transform( boardShown.Position + flight + lift, _rootRotation );
 	}
 
 	/// <summary>The rider came back down onto the deck from a hippy jump at this speed (m/s).</summary>
@@ -395,6 +567,22 @@ internal sealed class RiderAnimator
 
 	// Seconds before touchdown that a held grab lets go.
 	private const float GrabRelease = 0.4f;
+
+	// A grab let go for the landing stays let go through the landing until the grab is let go of, even where the landing
+	// can no longer be seen ahead in the last moments (a grab still held on touching down is not a ground grab); clearly
+	// more air ahead (a drop beyond a ledge) lets it be held again.
+	private bool _grabLetGo;
+
+	private bool LetGoForLanding( bool airborne, float timeToLand, bool grabbing )
+	{
+		if ( !grabbing )
+			_grabLetGo = false;
+		else if ( airborne && timeToLand > 0f && timeToLand < GrabRelease )
+			_grabLetGo = true;
+		else if ( airborne && timeToLand > GrabRelease + 0.2f )
+			_grabLetGo = false;
+		return _grabLetGo;
+	}
 
 	// Seconds until a body here, rising at this speed (m/s), comes down onto whatever is below it; zero with nothing
 	// below in reach.
@@ -437,6 +625,9 @@ internal sealed class RiderAnimator
 		SkateTrick.FrontsideShuvit => "shuvit-frontside",
 		SkateTrick.Shuvit360 => "shuvit360",
 		SkateTrick.FrontsideShuvit360 => "shuvit360-frontside",
+		SkateTrick.Hardflip360 => "hardflip360",
+		SkateTrick.InwardHeelflip360 => "inwardheelflip360",
+		SkateTrick.Plant => "plant",
 		_ => null
 	};
 
@@ -452,8 +643,58 @@ internal sealed class RiderAnimator
 		SkateAirGrab.Method => "method",
 		SkateAirGrab.Japan => "japan",
 		SkateAirGrab.Stiffy => "stiffy",
+		SkateAirGrab.Indy => "indy",
+		SkateAirGrab.NoseCrail => "nosecrail",
+		SkateAirGrab.RocketAir => "rocketair",
 		_ => null
 	};
+
+	// Frontside when the rail was on the rider's toe side as the board came onto it, decided as the grind starts.
+	private bool GrindFrontside( SkateState board, SkateGrind grind )
+	{
+		if ( grind == SkateGrind.None )
+		{
+			_grindSide = null;
+			_grindToesRight = null;
+			return true;
+		}
+		if ( _grindSide is null )
+		{
+			var toes = _clips?.ToeSide( BoardShown ) ?? 0f;
+			_grindToesRight = toes == 0f ? null : toes > 0f;
+			_grindSide = toes == 0f || board.GrindRailOnRight == toes > 0f;
+		}
+		return _grindSide.Value;
+	}
+
+	private bool? _grindSide;
+	private bool? _grindToesRight;
+
+	// A rail lost for a moment (a truck bouncing on it) is still the same grind: its name and sides hold for this long, so
+	// the graph does not drop out of the grind for a frame and pick its name afresh.
+	private const float RailLossHold = 0.15f;
+	private SkateGrind _heldGrind;
+	private float _offRail = 1f;
+
+	private SkateGrind HeldGrind( SkateGrind grind, float delta )
+	{
+		if ( grind != SkateGrind.None )
+		{
+			_heldGrind = grind;
+			_offRail = 0f;
+		}
+		// Popped off it, the grind is over at once.
+		else if ( _sincePop < RailLossHold || (_offRail += delta) >= RailLossHold )
+		{
+			_heldGrind = SkateGrind.None;
+		}
+		return _heldGrind;
+	}
+
+	// Whether the nose points toward the rider's heels across the rail (the heels are on the deck's right when the toes
+	// are not), or null when the toe side is unknown.
+	private bool? GrindNoseToHeels( SkateState board, SkateGrind grind ) =>
+		grind == SkateGrind.None || _grindToesRight is not { } toesRight ? null : board.GrindNoseRight != toesRight;
 
 	private static string GrindName( SkateGrind grind ) => grind switch
 	{
@@ -461,6 +702,8 @@ internal sealed class RiderAnimator
 		SkateGrind.FiveO => "fivezero",
 		SkateGrind.Nosegrind => "nosegrind",
 		SkateGrind.Boardslide => "boardslide",
+		SkateGrind.Noseslide => "noseslide",
+		SkateGrind.Tailslide => "tailslide",
 		_ => null
 	};
 

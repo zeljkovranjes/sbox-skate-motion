@@ -10,7 +10,9 @@ internal static class RailEdgeSpace
 
 	internal static Vector3 ToWorld( Vector3 value ) => new( value.Z, value.X, value.Y );
 
-	internal static RailSegment ToLookup( RailSegment value ) => new( ToLookup( value.Start ), ToLookup( value.End ) );
+	internal static RailSegment ToLookup( RailSegment value ) =>
+		value with { Start = ToLookup( value.Start ), End = ToLookup( value.End ), Top = ToLookup( value.Top ) };
 
-	internal static RailSegment ToWorld( RailSegment value ) => new( ToWorld( value.Start ), ToWorld( value.End ) );
+	internal static RailSegment ToWorld( RailSegment value ) =>
+		value with { Start = ToWorld( value.Start ), End = ToWorld( value.End ), Top = ToWorld( value.Top ) };
 }

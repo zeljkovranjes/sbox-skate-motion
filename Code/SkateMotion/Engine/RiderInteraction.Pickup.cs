@@ -8,12 +8,30 @@ internal sealed partial class RiderInteraction
 {
 	private readonly BoardPickupPlayback _pickup;
 	private bool _pickupRequested;
+
+	// Whether a reach animation is playing for this pickup: it calls the board itself once its hand is out.
+	private bool _reaching;
 	internal bool UsesSourcePickup => Action == RiderAction.PickUp && _pickup is not null;
 
-	internal void ObserveRetrievalRequest( bool requested )
+	// The board's own flight to the hand, without a retrieval profile: its start, time so far and length, and whether it
+	// has arrived.
+	private float _flightTime;
+	private float _flightLength;
+	private bool _flightDone;
+
+	// Without a reach animation to say when the hand is out, the board is called this many seconds into the pickup; with
+	// one that never calls it (cut short), after ReachCallAtLatest.
+	private const float CallAtLatest = 0.34f;
+	private const float ReachCallAtLatest = 1.5f;
+
+	/// <param name="requested">Whether the reach animation calls the board now.</param>
+	/// <param name="reaching">Whether a reach animation is playing.</param>
+	internal void ObserveRetrievalRequest( bool requested, bool reaching = false )
 	{
-		if ( UsesSourcePickup )
-			_pickupRequested |= requested;
+		if ( Action != RiderAction.PickUp )
+			return;
+		_pickupRequested |= requested;
+		_reaching |= reaching;
 	}
 
 	private void StepPickup( float delta )
@@ -41,6 +59,34 @@ internal sealed partial class RiderInteraction
 		Place( _pickup.Sample( target ) );
 	}
 
+	// The board is called once the reaching hand is out (the reach animation asks for it once its hold has taken over, or
+	// after CallAtLatest without one), then flies to the hand over a time that grows with the distance. The rider holds it
+	// only once it is there, so the reach comes back in with the board in the hand.
+	private void StepFlight( float delta )
+	{
+		if ( !_captured )
+		{
+			if ( !_pickupRequested && _elapsed < (_reaching ? ReachCallAtLatest : CallAtLatest) )
+				return;
+			_startBoard = _board.WorldTransform;
+			_flightTime = 0f;
+			_flightLength = BoardReach.FlightSeconds( SkateUnits.Metres( _motor.CarryPose.Position - _startBoard.Position ).Length() );
+			_captured = true;
+			CaptureBoard = true;
+			return;
+		}
+		_flightTime += delta;
+		_flightDone = _flightTime >= _flightLength;
+		_board.WorldTransform = Flight( _motor.CarryPose );
+	}
+
+	private Transform Flight( Transform hand )
+	{
+		var progress = _flightLength > 0f ? _flightTime / _flightLength : 1f;
+		var position = SkateUnits.Inches( BoardReach.Along( SkateUnits.Metres( _startBoard.Position ), SkateUnits.Metres( hand.Position ), progress ) );
+		return new Transform( position, Rotation.Slerp( _startBoard.Rotation, hand.Rotation, Ease( progress ) ), _startBoard.Scale );
+	}
+
 	/// <summary>
 	/// Shows the flying board for this frame. Retrieval advances on fixed updates, but the hand it flies into moves
 	/// every rendered frame, so the board is blended toward where the hand holds it now rather than where it held it
@@ -48,9 +94,12 @@ internal sealed partial class RiderInteraction
 	/// </summary>
 	internal void ShowPickup()
 	{
-		if ( !UsesSourcePickup || !_captured || !_motor.HasCarryPose )
+		if ( Action != RiderAction.PickUp || !_captured || !_motor.HasCarryPose )
 			return;
-		Place( _pickup.Sample( ToPhysical( _motor.CarryPose ) ) );
+		if ( UsesSourcePickup )
+			Place( _pickup.Sample( ToPhysical( _motor.CarryPose ) ) );
+		else
+			_board.WorldTransform = Flight( _motor.CarryPose );
 	}
 
 	private void Place( LimbRigidTransform frame )

@@ -7,4 +7,7 @@ internal static class SkateTags
 
 	/// <summary>Surfaces boards grind on; contacts with them use grind friction instead of wheel grip.</summary>
 	internal const string Grind = "grind";
+
+	/// <summary>Marks a rider's own board, which its walking body passes over while stepping off it.</summary>
+	internal const string Board = "skate_board";
 }

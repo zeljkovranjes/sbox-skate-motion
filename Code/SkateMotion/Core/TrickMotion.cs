@@ -6,8 +6,10 @@ internal static class TrickMotion
 	/// <summary>-1 flips outward (kickflip family), 1 inward (heelflip family), 0 no flip.</summary>
 	internal static float Flip( TrickKind trick ) => trick switch
 	{
-		TrickKind.Kickflip or TrickKind.VarialKickflip or TrickKind.Hardflip or TrickKind.Treflip => -1f,
-		TrickKind.Heelflip or TrickKind.VarialHeelflip or TrickKind.InwardHeelflip or TrickKind.Laserflip => 1f,
+		TrickKind.Kickflip or TrickKind.VarialKickflip or TrickKind.Hardflip or TrickKind.Treflip
+			or TrickKind.Hardflip360 => -1f,
+		TrickKind.Heelflip or TrickKind.VarialHeelflip or TrickKind.InwardHeelflip or TrickKind.Laserflip
+			or TrickKind.InwardHeelflip360 => 1f,
 		_ => 0f
 	};
 
@@ -16,7 +18,8 @@ internal static class TrickMotion
 	{
 		TrickKind.Shuvit or TrickKind.FrontsideShuvit or TrickKind.VarialKickflip or TrickKind.VarialHeelflip
 			or TrickKind.Hardflip or TrickKind.InwardHeelflip => 1f,
-		TrickKind.Shuvit360 or TrickKind.FrontsideShuvit360 or TrickKind.Treflip or TrickKind.Laserflip => 2f,
+		TrickKind.Shuvit360 or TrickKind.FrontsideShuvit360 or TrickKind.Treflip or TrickKind.Laserflip
+			or TrickKind.Hardflip360 or TrickKind.InwardHeelflip360 => 2f,
 		_ => 0f
 	};
 }

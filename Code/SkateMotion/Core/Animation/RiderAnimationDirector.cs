@@ -16,10 +16,17 @@ internal sealed class RiderAnimationDirector
 	private bool _fast;
 	private int _lean;
 	private float _blendLean;
+	private float _blendTwist;
 	private float _carving;
 	private float _crouch;
 	private float _tuck;
 	private float _wall;
+	private float _balance;
+	private float _impactBlend;
+
+	// Rate (per second) the impact blend eases toward a landing's impact on the ground: quicker than the other blends, so a
+	// landing gives at once, yet over a few frames.
+	private const float ImpactEase = 15f;
 
 	/// <param name="clipsGoofy">Whether the clips were authored with the right foot forward.</param>
 	internal RiderAnimationDirector( bool clipsGoofy ) => _clipsGoofy = clipsGoofy;
@@ -81,6 +88,7 @@ internal sealed class RiderAnimationDirector
 				parameters.Set( "height", "high" );
 				break;
 			case RiderActivity.Dropping:
+			case RiderActivity.Throwing:
 				Set( parameters, "offboard", "throw", "once" );
 				break;
 			case RiderActivity.Bailed:
@@ -124,7 +132,10 @@ internal sealed class RiderAnimationDirector
 		_crouch += (crouch - _crouch) * ease;
 		_tuck += (Math.Clamp( (speed - 6f) / 3f, 0f, 1f ) - _tuck) * ease;
 		parameters.Set( "blend-lean", _blendLean );
-		parameters.Set( "blend-twist", steer );
+		// Steering leans a grind's or slide's pose over the rail: eased like the lean, so starting or letting go of a turn
+		// moves the rider's body and feet across instead of jumping them to the other pose in one frame.
+		_blendTwist += (steer - _blendTwist) * ease;
+		parameters.Set( "blend-twist", _blendTwist );
 		parameters.Set( "blend-carving", _carving );
 		// Slow, tight carves are quick; fast ones are long.
 		parameters.Set( "blend-carve-speed", 1f - Math.Clamp( (speed - 2f) / 6f, 0f, 1f ) );
@@ -137,11 +148,25 @@ internal sealed class RiderAnimationDirector
 		var wall = MathF.Sign( input.DeckRoll ) * Math.Clamp( (MathF.Abs( input.DeckRoll ) - 0.7f) / 0.3f, 0f, 1f );
 		_wall += (wall - _wall) * ease;
 		parameters.Set( "blend-wall", _wall );
+		// A grab's tweak: the trick stick held while grabbing (x toward the toes, y forward) blends its tweaked poses.
+		parameters.Set( "tweak_x", input.TweakX );
+		parameters.Set( "tweak_y", input.TweakY );
 		parameters.Set( "blend-pop-height", input.HighPop ? 1f : 0f );
 		parameters.Set( "blend-windup", Math.Clamp( input.Windup, 0f, 1f ) );
-		parameters.Set( "blend-impact", Math.Clamp( input.LandingSpeed / 6f, 0f, 1f ) );
+		// In the air this weight is the board adjust's magnitude: how far the trick stick is held over, which blends in a
+		// board adjust and tweaks the nose and tail grabs. On the ground it is the last landing's impact, which eases in: taken
+		// in a frame it gave the riding pose's knees and arms at once (a board thrown off its wheels at a bank's foot and
+		// meeting its face turned the head 10 degrees and an arm 24 in a frame).
+		if ( input.Airborne )
+			_impactBlend = Math.Min( 1f, MathF.Sqrt( input.AirStickX * input.AirStickX + input.AirStickY * input.AirStickY ) );
+		else
+			_impactBlend += (Math.Clamp( input.LandingSpeed / 6f, 0f, 1f ) - _impactBlend) * (1f - MathF.Exp( -ImpactEase * delta ));
+		parameters.Set( "blend-impact", _impactBlend );
 		LandingBlend( input, parameters );
-		parameters.Set( "blend-balance", 0.9f * Math.Clamp( input.DeckPitch / 0.4f, -1f, 1f ) );
+		// The deck's pitch eases into the balance blend like the other blends: riding onto a bank pitched the deck over a few
+		// frames and swung the upper body as fast.
+		_balance += (0.9f * Math.Clamp( input.DeckPitch / 0.4f, -1f, 1f ) - _balance) * ease;
+		parameters.Set( "blend-balance", _balance );
 		parameters.Set( "rider-style", input.Style ?? "DEFAULT" );
 		// Push weights: speed picks the quick or slow push, and speed plus the push's gain picks the strong or light one.
 		parameters.Set( "blend-push-speed", Math.Clamp( speed / 8.5f, 0f, 1f ) );
@@ -182,7 +207,7 @@ internal sealed class RiderAnimationDirector
 	{
 		if ( input.Handplant is not null )
 		{
-			Set( parameters, "handplant", "handplant" + (input.Handplant.Length > 0 ? "-" + input.Handplant : ""), "cycle" );
+			Set( parameters, "handplant", "handplant", input.Handplant );
 			parameters.Set( "side", input.GrindFrontside ? "frontside" : "backside" );
 			return;
 		}

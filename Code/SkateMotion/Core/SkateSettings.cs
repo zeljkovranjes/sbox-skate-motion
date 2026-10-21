@@ -14,6 +14,24 @@ internal sealed record SkateSettings
 	internal float Wheelbase { get; init; } = 0.52f;
 	internal float Track { get; init; } = 0.19f;
 	internal float RideHeight { get; init; } = 0.095f;
+
+	/// <summary>The deck's length nose to tail (metres): where its ends rest on a rail in a slide.</summary>
+	internal float DeckLength { get; init; } = 0.8f;
+
+	/// <summary>The deck's length as it collides with the ground: shorter than DeckLength by its kicked nose and tail.</summary>
+	internal float DeckCollisionLength { get; init; } = 0.8f;
+
+	/// <summary>The deck's width edge to edge (metres).</summary>
+	internal float DeckWidth { get; init; } = 0.22f;
+
+	/// <summary>The deck's thickness at its centre line (metres): how far its underside is below its middle.</summary>
+	internal float DeckThickness { get; init; } = 0.025f;
+
+	/// <summary>From a truck's axle line to the hanger's underside between the wheels (metres): what rests on a rail.</summary>
+	internal float HangerRadius { get; init; } = 0.008f;
+
+	/// <summary>The gap between one truck's two wheels' inner faces (metres): the rail stays inside it.</summary>
+	internal float InnerWheelGap { get; init; } = 0.12f;
 	internal float Spring { get; init; } = 32000f;
 	internal float Damping { get; init; } = 1600f;
 	internal float Grip { get; init; } = 0.85f;

@@ -11,10 +11,10 @@ internal sealed class SteeringResponse
 	private float _pushScale = 1f;
 
 	// Per sixtieth of a second: share of the new input taken, and how fast pushing eases steering down and back.
-	private const float InputShare = 0.7f;
-	private const float PushDrop = 0.015f;
-	private const float PushRecover = 0.05f;
-	private const float PushFloor = 0.5f;
+	internal const float InputShare = 0.7f;
+	internal const float PushDrop = 0.015f;
+	internal const float PushRecover = 0.05f;
+	internal const float PushFloor = 0.5f;
 
 	/// <summary>Share of steering kept while balancing a manual.</summary>
 	internal const float ManualShare = 0.6f;

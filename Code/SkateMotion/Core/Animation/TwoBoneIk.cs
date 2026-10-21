@@ -50,7 +50,15 @@ internal sealed class TwoBoneIk
 	/// <param name="target">Where the end bone should go.</param>
 	/// <param name="hint">Direction the knee should point (e.g. the toes' direction); keeps a nearly straight
 	/// leg from flipping its knee to the other side. Zero keeps the current bend.</param>
-	internal void Solve( Span<Vector3> positions, Span<Quaternion> rotations, Vector3 target, Vector3 hint = default )
+	/// <param name="carryEnd">The end bone (a foot) turns with the lower bone, keeping its angle to it, instead of keeping
+	/// its orientation: a foot moved out of something it has no surface to stand on keeps its ankle's angle.</param>
+	internal void Solve( Span<Vector3> positions, Span<Quaternion> rotations, Vector3 target, Vector3 hint = default,
+		bool carryEnd = false ) => Solve( positions, rotations, target, hint, carryEnd ? 1f : 0f );
+
+	/// <summary>As above, the end bone (the foot) turning with the lower bone by <paramref name="carryEnd"/> (0 to 1):
+	/// switched between turning and not in one frame (a foot on a rail turning with the shin, off it not), the ankle
+	/// opened or closed by the shin's whole swing at once.</summary>
+	internal void Solve( Span<Vector3> positions, Span<Quaternion> rotations, Vector3 target, Vector3 hint, float carryEnd )
 	{
 		var hip = positions[ _upper ];
 		var knee = positions[ _lower ];
@@ -94,10 +102,91 @@ internal sealed class TwoBoneIk
 		Rotate( positions, rotations, _lower, knee, newKnee, lowerTurn );
 		foreach ( var bone in _lowerOnly )
 			Rotate( positions, rotations, bone, knee, newKnee, lowerTurn );
+		if ( carryEnd > 0f )
+		{
+			var endTurn = carryEnd >= 1f ? lowerTurn : Quaternion.Slerp( Quaternion.Identity, lowerTurn, carryEnd );
+			Rotate( positions, rotations, _end, ankle, newAnkle, endTurn );
+			foreach ( var bone in _endTree )
+				Rotate( positions, rotations, bone, ankle, newAnkle, endTurn );
+			return;
+		}
 		var shift = newAnkle - ankle;
 		positions[ _end ] = newAnkle;
 		foreach ( var bone in _endTree )
 			positions[ bone ] += shift;
+	}
+
+	/// <summary>
+	/// Keeps the middle bone (the elbow) within <paramref name="most"/> radians of <paramref name="before"/>, a direction it
+	/// pointed from the line between the first bone and the end a moment ago, turning it back round that line if it has
+	/// swung further: the end and everything hanging from it stay as they are. Returns the direction the middle bone
+	/// points from that line now, or zero when the chain is too straight to say.
+	/// </summary>
+	internal Vector3 LimitSwing( Span<Vector3> positions, Span<Quaternion> rotations, Vector3 before, float most )
+	{
+		var hip = positions[ _upper ];
+		var line = positions[ _end ] - hip;
+		if ( line.LengthSquared() < 1e-8f )
+			return Vector3.Zero;
+		line = Vector3.Normalize( line );
+		var now = Across( positions[ _lower ] - hip, line );
+		var was = Across( before, line );
+		if ( now == Vector3.Zero || was == Vector3.Zero )
+			return now;
+		var angle = MathF.Atan2( Vector3.Dot( Vector3.Cross( was, now ), line ), Vector3.Dot( was, now ) );
+		if ( MathF.Abs( angle ) <= most )
+			return now;
+		var back = Quaternion.CreateFromAxisAngle( line, MathF.Sign( angle ) * most - angle );
+		Rotate( positions, rotations, _upper, hip, hip, back );
+		foreach ( var bone in _upperOnly )
+			Rotate( positions, rotations, bone, hip, hip, back );
+		Rotate( positions, rotations, _lower, hip, hip, back );
+		foreach ( var bone in _lowerOnly )
+			Rotate( positions, rotations, bone, hip, hip, back );
+		return Across( positions[ _lower ] - hip, line );
+	}
+
+	// The unit direction of a vector across a line (zero when it lies along it).
+	private static Vector3 Across( Vector3 value, Vector3 line )
+	{
+		var across = value - line * Vector3.Dot( value, line );
+		return across.LengthSquared() > 1e-8f ? Vector3.Normalize( across ) : Vector3.Zero;
+	}
+
+	/// <summary>
+	/// Opens the joint at the end (an ankle) to at least <paramref name="least"/> radians between the lower bone and
+	/// <paramref name="tip"/> (the ball of the foot, a bone under the end), by <paramref name="weight"/> of what it lacks:
+	/// the end bone and everything under it turn about the end, away from the lower bone. A foot moved down onto a deck
+	/// lower than the clip's, its shin swung forward over it, would otherwise fold its ankle shut; it tips onto its toes
+	/// instead. Returns the turn given (radians).
+	/// </summary>
+	internal float OpenEnd( Span<Vector3> positions, Span<Quaternion> rotations, int tip, float least, float weight = 1f )
+	{
+		var end = positions[ _end ];
+		var lower = positions[ _lower ] - end;
+		var toward = positions[ tip ] - end;
+		if ( !(lower.LengthSquared() > 1e-8f) || !(toward.LengthSquared() > 1e-8f) )
+			return 0f;
+		var angle = MathF.Acos( Math.Clamp( Vector3.Dot( Vector3.Normalize( lower ), Vector3.Normalize( toward ) ), -1f, 1f ) );
+		var missing = (least - angle) * Math.Clamp( weight, 0f, 1f );
+		var axis = Vector3.Cross( lower, toward );
+		if ( !(missing > 0f) || !(axis.LengthSquared() > 1e-12f) )
+			return 0f;
+		var turn = Quaternion.CreateFromAxisAngle( Vector3.Normalize( axis ), missing );
+		Rotate( positions, rotations, _end, end, end, turn );
+		foreach ( var bone in _endTree )
+			Rotate( positions, rotations, bone, end, end, turn );
+		return missing;
+	}
+
+	/// <summary>The angle (radians) at the end joint between the lower bone and <paramref name="tip"/>.</summary>
+	internal float EndAngle( ReadOnlySpan<Vector3> positions, int tip )
+	{
+		var lower = positions[ _lower ] - positions[ _end ];
+		var toward = positions[ tip ] - positions[ _end ];
+		if ( !(lower.LengthSquared() > 1e-8f) || !(toward.LengthSquared() > 1e-8f) )
+			return MathF.PI;
+		return MathF.Acos( Math.Clamp( Vector3.Dot( Vector3.Normalize( lower ), Vector3.Normalize( toward ) ), -1f, 1f ) );
 	}
 
 	// A hard switch at a straightness threshold moves the knee to a different plane in one frame.

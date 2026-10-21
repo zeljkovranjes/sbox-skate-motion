@@ -24,21 +24,35 @@ internal sealed class RiderControllerInput
 	private static readonly InputCommandKey _leftSlide = InputCommandKey.Encode( "LEFTSLIDESTART"u8 );
 	private static readonly InputCommandKey _rightSlide = InputCommandKey.Encode( "RIGHTSLIDESTART"u8 );
 	private static readonly InputCommandKey _toggle = InputCommandKey.Encode( "NEWTOGGLEOFFBOARDSTATE"u8 );
+	private static readonly InputCommandKey _toggleHeld = InputCommandKey.Encode( "TOGGLEOFFBOARDSTATE"u8 );
 	private static readonly InputCommandKey _jump = InputCommandKey.Encode( "OB_JUMP"u8 );
 	private static readonly InputCommandKey _drop = InputCommandKey.Encode( "OB_DROPBOARD"u8 );
+	private static readonly InputCommandKey _throw = InputCommandKey.Encode( "OB_THROWBOARD"u8 );
 	private static readonly InputCommandKey _retrieve = InputCommandKey.Encode( "OB_RETRIEVEBOARD"u8 );
 	private static readonly InputCommandKey _bail = InputCommandKey.Encode( "WIPEOUTREQUEST"u8 );
 	private static readonly InputCommandKey _recover = InputCommandKey.Encode( "WIPEOUTRECOVER"u8 );
+	private static readonly InputCommandKey _darkCatch = InputCommandKey.Encode( "DARKCATCH"u8 );
+	private static readonly InputCommandKey _grabWorld = InputCommandKey.Encode( "GRABWORLD"u8 );
+	private readonly GrabSelection _grab = new();
+
+	// Seconds since the last update, for the grab pick's settle time.
+	private float _delta;
 	private static readonly InputCommandKey _walkX = InputCommandKey.Encode( "OB_BIPEDWORLDX"u8 );
 	private static readonly InputCommandKey _walkY = InputCommandKey.Encode( "OB_BIPEDWORLDZ"u8 );
 
 	internal InputRequestBuffer Requests => _frame.Requests;
 	internal bool Toggle => Has( _toggle );
+
+	/// <summary>True while the mount button is held (waiting at the lip of a drop-in).</summary>
+	internal bool ToggleHeld => Has( _toggleHeld );
 	internal bool Jump => Has( _jump );
 
 	/// <summary>True while the sprint button is held on foot.</summary>
 	internal bool Sprint => Has( _sprint );
 	internal bool Drop => Has( _drop );
+
+	/// <summary>True on the frame the right trigger is pulled all the way: throws the board held in the hand.</summary>
+	internal bool Throw => Has( _throw );
 	internal bool Retrieve => Has( _retrieve );
 	internal bool Bail => Has( _bail );
 	internal bool Recover => Has( _recover );
@@ -53,9 +67,11 @@ internal sealed class RiderControllerInput
 		_commands = new QueuedInputCommand[ _gestures?.SetCount ?? 0 ];
 	}
 
+	/// <param name="reading">This frame's controller reading with drift taken out (DeviceInputMerge.Settle).</param>
 	internal void Update( SkateRiderMode mode, SkateState board, bool interacting, bool goofy,
-		Vector3 facing, float delta )
+		Vector3 facing, float delta, ControllerReading reading )
 	{
+		_delta = delta;
 		var riding = mode == SkateRiderMode.Riding;
 		var bailed = mode == SkateRiderMode.Bailed;
 		// These are current motor gates; complete movement-graph context binding remains separate.
@@ -70,7 +86,6 @@ internal sealed class RiderControllerInput
 			Walking = new( new System.Numerics.Vector3( -facing.y, 0f, facing.x ), false, default,
 				_profile.Walking[ 0 ], _profile.Walking[ 1 ] )
 		};
-		var reading = LocalControllerInput.Read();
 		var count = 0;
 		if ( _gestures is not null )
 		{
@@ -86,8 +101,9 @@ internal sealed class RiderControllerInput
 		var reading = _router.State.Current;
 		var left = Has( _leftGrab );
 		var right = Has( _rightGrab );
-		var grab = left && right ? SkateAirGrab.Crail : left ? SkateAirGrab.Mute
-			: right ? SkateAirGrab.Stale : SkateAirGrab.None;
+		// The triggers are the hands: the right trigger is the front hand for a regular stance, the left one for goofy.
+		// Where the right stick points as a hand reaches picks the grab.
+		var grab = AirGrabs.From( _grab.Step( goofy ? left : right, goofy ? right : left, reading.RightX, reading.RightY, goofy, _delta ) );
 		return new( -Value( _turn ), Has( _push ) ? 1f : 0f, Has( _brake ) ? 1f : 0f,
 			// The left stick, pushed forward or pulled back while grabbing, leans into a front or back flip.
 			reading.RightX, reading.RightY, grab == SkateAirGrab.None ? 0f : reading.LeftY,
@@ -99,7 +115,14 @@ internal sealed class RiderControllerInput
 				| (Has( _rightPush ) ? SkatePushFeet.Right : SkatePushFeet.None),
 			NewPush = Has( _newPush ),
 			// Both push buttons together crouch for a hippy jump.
-			HippyJump = Has( _leftPush ) && Has( _rightPush )
+			// Both push buttons with both triggers is a coffin, not a hippy jump.
+			HippyJump = Has( _leftPush ) && Has( _rightPush ) && !(left && right),
+			// B (or the right bumper) is the catch; the push buttons in the air take a foot off.
+			Catch = Has( _darkCatch ),
+			FeetOff = (reading.Down( ControllerButtons.West ) ? SkatePushFeet.Left : SkatePushFeet.None)
+				| (reading.Down( ControllerButtons.South ) ? SkatePushFeet.Right : SkatePushFeet.None),
+			// The right bumper grabs the world: off a ramp's lip, a hand plant.
+			HandPlant = Has( _grabWorld )
 		};
 	}
 
