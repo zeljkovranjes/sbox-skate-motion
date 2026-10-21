@@ -34,6 +34,10 @@ internal sealed class ClipRiderAnimation
 	private readonly System.Numerics.Vector3[] _sourcePositions;
 	private readonly System.Numerics.Quaternion[] _sourceRotations;
 	private float _sourceTime = SourceBlend;
+
+	// The graph's top-level placeholder, entered only when no other state can be: its clip keeps whatever default
+	// animation the original host had, so the body keeps its last pose instead.
+	private const string Placeholder = "Default";
 	private bool _shownRequest;
 	private bool _sourceShown;
 
@@ -256,13 +260,16 @@ internal sealed class ClipRiderAnimation
 	// Inches the held board is moved out to clear the body; the way it is moved (in the model's frame) and the hand moved
 	// with it, kept so the arm's reach eases back in once the board has left the hand.
 	private float _clearancePush;
+	private float _clearanceSpeed;
 	private Vector3 _clearanceAway;
 	private int _clearanceHand = -1;
 
-	// Rate at which a clearance turn the body no longer needs eases back out, and the fastest (inches per second) a
-	// growing one moves the board and arm out.
-	private const float ClearanceRelease = 8f;
-	private const float ClearanceRise = 60f;
+	// How quickly (the spring's frequency, radians per second) the arm's reach out from the body follows a growing push
+	// and a shrinking one. Followed at a rate the arm jumped out up to an inch in a frame and swung out and back in with
+	// each stride of a run; followed by a critically damped spring it sets off and settles smoothly, and coming back
+	// slowly it stays out through a run's strides.
+	private const float ClearanceOut = 16f;
+	private const float ClearanceIn = 4f;
 
 	// The rider's hands measured from its mesh, by hand bone: direction to the fingertips in the hand bone's frame,
 	// length and thickness (inches).
@@ -282,7 +289,7 @@ internal sealed class ClipRiderAnimation
 
 	// Each hand's fingers as joint chains from the knuckle out, and how thick they are (inches): with them the holding
 	// hand's gap to the deck is measured as it is posed, wrapped round the deck's edge, rather than as a flat paddle.
-	private readonly Dictionary<int, (int[][] Chains, float Radius)> _fingerChains = new();
+	private readonly Dictionary<int, (int[][] Chains, int Thumb, float Radius)> _fingerChains = new();
 	private readonly List<(Vector3 Point, float Radius)> _handPoints = new();
 
 	// Which finger (its chain's index) each of the hand's points belongs to.
@@ -297,10 +304,14 @@ internal sealed class ClipRiderAnimation
 	// How fast (per second) the held deck follows where the posed fingers leave room for it.
 	private const float HandFollow = 20f;
 
-	// The carried board's place in the holding hand (the hand bone's frame), and how fast (per second) it follows the
-	// clips' while the board is simply carried.
+	// The carried board's place in the holding hand (the hand bone's frame), the hand holding it and how long it has
+	// held it; for its first GripSettle seconds the place follows the clips' at HeldFollow per second (the hand has the
+	// board before the clip's grip is round it: taken at once it was held 5 in off), and is kept from then.
 	private Transform _heldInHand;
 	private bool _heldSteady;
+	private int _heldHand = -1;
+	private float _heldFor;
+	private const float GripSettle = 0.5f;
 	private const float HeldFollow = 12f;
 
 	// The give of a hand catching the flying board: the board's arrival speed carries hand and board on, easing back
@@ -648,10 +659,26 @@ internal sealed class ClipRiderAnimation
 
 	internal void Request( IReadOnlyDictionary<string, string> tags, float seconds ) => _director.Request( tags, seconds );
 
+	// A body pose the first poses blend from (model-space bone transforms), and how far into the blend it is.
+	private Transform[] _fadeFrom;
+	private float _fadeFor;
+	private float _fadeTime;
+
+	internal void BlendFrom( Transform[] modelPose, float seconds )
+	{
+		if ( modelPose is null || modelPose.Length != _positions.Length || !(seconds > 0f) )
+			return;
+		_fadeFrom = modelPose;
+		_fadeFor = seconds;
+		_fadeTime = 0f;
+	}
+
 	internal IReadOnlyList<string> Actions( string family, string style ) => _graph.Actions( family, style );
 
 	internal void Update( in RiderAnimationInput input, float delta, Transform root )
 	{
+		if ( _fadeFrom is not null )
+			_fadeTime += delta;
 		if ( input.Activity != RiderActivity.Riding )
 		{
 			Switch = false;
@@ -682,19 +709,21 @@ internal sealed class ClipRiderAnimation
 			_parameters, carryHand >= 0 ? _retargeter.SourceBone( carryHand, mirror ) : -1, _anchor );
 		if ( requested )
 			_graph.Update( _parameters, delta, _motionPose );
-		// A graph's first frames as its first state blends in can give no usable pose: the body keeps the last one it
-		// showed (a new rider stays hidden until it has one) rather than dropping into its bind pose, the T.
-		if ( !(requested ? _motionPose : _statePose).Usable )
-			return;
-		ShowSource( requested ? _motionPose : _statePose, requested, delta );
 		// The board is dark side up while the graph is in a state that holds it so; the facts carry that into the next
 		// frame, so the graph's dark states can follow one another.
 		Dark = input.Activity == RiderActivity.Riding
 			&& ((_treeStates?.Player.Graph ?? _states?.Graph)?.HasAction( SetDark ) ?? false);
 		_riderFacts.GraphDark = Dark;
+		_riderFacts.GraphHippyJump = State?.Contains( "HippyJump." ) == true;
 		// Stepping off from a grab, the rider is on the board in the air until the graph's let-go has played out.
 		_riderFacts.GraphAirDismounting = (_treeStates?.Player.Graph ?? _states?.Graph)?.HasAction( AirDismounting ) ?? false;
 		DarkOnGround = Dark && _facts.Physics == "ground";
+		// A graph's first frames as its first state blends in can give no usable pose, and its placeholder state no pose of
+		// the rider's: the body keeps the last one it showed (a new rider stays hidden until it has one) rather than
+		// dropping into its bind pose, the T, or standing up straight.
+		if ( !(requested ? _motionPose : _statePose).Usable || State == Placeholder )
+			return;
+		ShowSource( requested ? _motionPose : _statePose, requested, delta );
 		if ( TrackStance() )
 		{
 			mirror = !mirror;
@@ -922,10 +951,20 @@ internal sealed class ClipRiderAnimation
 		var scene = _renderer.SceneModel;
 		if ( scene is null )
 			return;
+		// Taking another body's place, the pose eases across from that body's own.
+		var fade = _fadeFrom is null ? 1f : Smoothstep( Math.Clamp( _fadeTime / _fadeFor, 0f, 1f ) );
+		if ( fade >= 1f )
+			_fadeFrom = null;
 		for ( var bone = 0; bone < _positions.Length; bone++ )
 		{
 			var transform = new Transform( SkateUnits.ToEngine( _retargeter.ToModel( _positions[ bone ] ) ),
 				SkateUnits.ToEngine( _retargeter.ToModel( _rotations[ bone ] ) ) );
+			if ( _fadeFrom is not null )
+			{
+				var from = _fadeFrom[ bone ];
+				transform = new Transform( Vector3.Lerp( from.Position, transform.Position, fade ),
+					Rotation.Slerp( from.Rotation, transform.Rotation, fade ) );
+			}
 			scene.SetBoneOverride( bone, in transform );
 		}
 		if ( appearing )
@@ -974,7 +1013,10 @@ internal sealed class ClipRiderAnimation
 		pose = _fit.Held( pose, _positions[ hand ] );
 		var held = new Transform( model.PointToWorld( SkateUnits.ToEngine( pose.Position ) ),
 			model.Rotation * SkateUnits.ToEngine( pose.Rotation ), _board.WorldScale );
-		held = OutOfHand( held, model, hand, delta );
+		// The grip is kept first, then the deck fitted between the thumb and fingers of the hand as posed now; while the grip
+		// still settles (the pickup's clip handing over to the carry's) the fingers keep the sides they are on.
+		held = HoldInHand( held, model, hand, carried, delta );
+		held = OutOfHand( held, model, hand, carried && _heldFor >= GripSettle, delta );
 		held = CatchGive( held, model, hand );
 		// Reaching for a board still on its way, the hand holds nothing yet: where the board is called to is not pushed clear
 		// of the body, nor the arm with it (the clips' own board, far off as the reach begins, would swing the arm out).
@@ -982,28 +1024,35 @@ internal sealed class ClipRiderAnimation
 		if ( reaching || _offHand > 0.5f )
 			EaseClearanceOut( delta );
 		var clear = reaching || _offHand > 0.5f ? held : ClearOfBody( held, model, hand, mirror, delta );
-		return OntoClipBoard( OffHand( HoldInHand( clear, model, hand, carried, delta ), mirror, sourceHand, carried, delta ),
-			model, mirror, sourceHand, mounting, airborne, delta );
+		return OntoClipBoard( OffHand( clear, mirror, sourceHand, carried, delta ), model, mirror, sourceHand, mounting, airborne,
+			delta );
 	}
 
-	// The clips place the board by their own board bone and the hand by its arm, and a change of clip eases each bone
-	// on its own, so for a moment the two drift apart and the board would slide in the hand (most at a walk turning
-	// into a run). While the board is simply carried its place in the hand follows the clips' over a short time instead,
-	// so it moves with the hand; picking it up and putting it down it goes where the clips put it.
+	// The clips place the board by their own board bone and the hand by its arm, and each clip holds it a little
+	// differently (up to 1.5 in apart between standing, running and the air), so followed clip by clip the deck slid in
+	// the hand and through the fingers, and a change of clip eased each bone on its own. While the board is simply carried
+	// it keeps the place in the hand the clips settle it into as the hand takes it, as a grip does, and goes wherever the
+	// hand goes; picking it up and putting it down it goes where the clips put it.
 	private Transform HoldInHand( Transform held, Transform model, int hand, bool carried, float delta )
 	{
 		var grip = new Transform( model.PointToWorld( SkateUnits.ToEngine( _positions[ hand ] ) ),
 			model.Rotation * SkateUnits.ToEngine( _rotations[ hand ] ) );
 		var placed = grip.ToLocal( held );
-		if ( !carried || !_heldSteady || !Finite( placed ) )
+		if ( !carried || !_heldSteady || hand != _heldHand || !Finite( placed ) )
 		{
 			_heldInHand = placed;
 			_heldSteady = carried && Finite( placed );
+			_heldHand = hand;
+			_heldFor = 0f;
 			return held;
 		}
-		var follow = 1f - MathF.Exp( -HeldFollow * delta );
-		_heldInHand = new Transform( Vector3.Lerp( _heldInHand.Position, placed.Position, follow ),
-			Rotation.Slerp( _heldInHand.Rotation, placed.Rotation, follow ), placed.Scale );
+		if ( _heldFor < GripSettle )
+		{
+			_heldFor += delta;
+			var follow = 1f - MathF.Exp( -HeldFollow * delta );
+			_heldInHand = new Transform( Vector3.Lerp( _heldInHand.Position, placed.Position, follow ),
+				Rotation.Slerp( _heldInHand.Rotation, placed.Rotation, follow ), placed.Scale );
+		}
 		return grip.ToWorld( _heldInHand );
 	}
 
@@ -1015,17 +1064,22 @@ internal sealed class ClipRiderAnimation
 	// rider's mesh (wrist to fingertips, with its thickness) lies against the deck instead of in it: a larger move
 	// applies at once so the hand never shows inside the deck, a smaller one eases in, and the deck stays on its side
 	// of the hand unless the other side is clearly shorter.
-	private Transform OutOfHand( Transform held, Transform model, int hand, float delta )
+	// Gripped (the board held in a settled grip), the thumb goes over the deck and the fingers under it.
+	private Transform OutOfHand( Transform held, Transform model, int hand, bool gripped, float delta )
 	{
 		// Nothing pushes any more: the push eases out, but never back into the hand.
 		var push = MathX.Lerp( _handPush, 0f, 1f - MathF.Exp( -HandRelease * delta ) );
 		if ( _fingers is not null && _fingerChains.ContainsKey( hand ) )
 		{
-			var room = HandRoom( held, model, hand, _handPush );
+			var room = HandRoom( held, model, hand, _handPush, gripped );
 			var wanted = room is not { } bounds ? 0f
 				: bounds.Lowest <= bounds.Highest ? Math.Clamp( 0f, bounds.Lowest, bounds.Highest )
 				: (bounds.Lowest + bounds.Highest) * 0.5f;
-			_handPush = MathX.Lerp( _handPush, wanted, 1f - MathF.Exp( -HandFollow * delta ) );
+			// In a settled grip, a finger inside the deck goes out to the nearest place clear of every finger at once (eased,
+			// the thumb showed through it for a few frames); otherwise the deck eases.
+			var inside = gripped && room is { } now && now.Lowest <= now.Highest && (_handPush < now.Lowest || _handPush > now.Highest);
+			_handPush = inside ? Math.Clamp( _handPush, room.Value.Lowest, room.Value.Highest )
+				: MathX.Lerp( _handPush, wanted, 1f - MathF.Exp( -HandFollow * delta ) );
 			return Lifted( held );
 		}
 		if ( HandOverlap( held, model, hand ) is { } overlap )
@@ -1086,13 +1140,14 @@ internal sealed class ClipRiderAnimation
 	// one side as a whole, the side its first point over the deck is on at the current push (nearest the palm, which
 	// holds the deck's edge): a thumb tip curling down toward the deck's middle plane stays a thumb over the deck, where
 	// counting it as beneath once past that plane asked the deck to rise over it and closed the grip on the deck's middle.
-	private (float Lowest, float Highest)? HandRoom( Transform board, Transform model, int hand, float push )
+	private (float Lowest, float Highest)? HandRoom( Transform board, Transform model, int hand, float push, bool gripped )
 	{
 		if ( _skateboard is null )
 			return null;
 		var lowest = float.MinValue;
 		var highest = float.MaxValue;
 		var points = HandPoints( model, hand );
+		var thumb = _fingerChains.TryGetValue( hand, out var fingers ) ? fingers.Thumb : -1;
 		var finger = -1;
 		var above = false;
 		for ( var i = 0; i < points.Count; i++ )
@@ -1102,10 +1157,13 @@ internal sealed class ClipRiderAnimation
 			if ( _skateboard.DeckSurface( local.x, local.y ) is not { } surface )
 				continue;
 			var thickness = (board.PointToLocal( point + board.Rotation.Up * radius ) - local).Length;
+			// Each finger keeps the side of the deck its knuckle is on; a carried board is held as the clips hold it, the
+			// thumb over the deck and the fingers under it, whichever side the clips' grip put them on for this rider's hand
+			// (put over the thumb, the deck was carried resting on it).
 			if ( _handChains[ i ] != finger )
 			{
 				finger = _handChains[ i ];
-				above = local.z - push >= (surface.Top + surface.Bottom) * 0.5f;
+				above = gripped && thumb >= 0 ? finger == thumb : local.z - push >= (surface.Top + surface.Bottom) * 0.5f;
 			}
 			if ( above )
 				highest = MathF.Min( highest, local.z - surface.Top - thickness );
@@ -1164,20 +1222,23 @@ internal sealed class ClipRiderAnimation
 		return _handPoints;
 	}
 
-	// A hand's fingers from the rig's finger roles, each a chain of at least two joints, and their thickness, a share of
-	// the longest finger's length; null without fingers.
-	private (int[][] Chains, float Radius)? FingerChains( Model model, string side )
+	// A hand's fingers from the rig's finger roles, each a chain of at least two joints, which of them is the thumb (-1 for
+	// none), and their thickness, a share of the longest finger's length; null without fingers.
+	private (int[][] Chains, int Thumb, float Radius)? FingerChains( Model model, string side )
 	{
-		var chains = HumanoidBones.Fingers
-			.Select( finger => new[] { 1, 2, 3 }.Select( joint => Rig[ $"{side}_{finger}{joint}" ] ).Where( bone => bone >= 0 ).ToArray() )
-			.Where( chain => chain.Length >= 2 ).ToArray();
-		if ( chains.Length == 0 )
+		var named = HumanoidBones.Fingers
+			.Select( finger => (Finger: finger,
+				Chain: new[] { 1, 2, 3 }.Select( joint => Rig[ $"{side}_{finger}{joint}" ] ).Where( bone => bone >= 0 ).ToArray()) )
+			.Where( entry => entry.Chain.Length >= 2 ).ToArray();
+		if ( named.Length == 0 )
 			return null;
+		var chains = named.Select( entry => entry.Chain ).ToArray();
+		var thumb = System.Array.FindIndex( named, entry => entry.Finger == "thumb" );
 		var bones = model.Bones.AllBones;
 		System.Func<int, Vector3> at = index => bones.First( bone => bone.Index == index ).LocalTransform.Position;
 		var longest = chains.Max( chain =>
 			Enumerable.Range( 1, chain.Length - 1 ).Sum( joint => (at( chain[ joint ] ) - at( chain[ joint - 1 ] )).Length ) );
-		return (chains, longest * FingerThickness);
+		return (chains, thumb, longest * FingerThickness);
 	}
 
 	/// <summary>
@@ -1253,8 +1314,7 @@ internal sealed class ClipRiderAnimation
 		var needed = _clearance[ side ].Push( held, box, away, world );
 		// A larger push follows at once up to a rate (the body turning fast into the board would otherwise throw the arm
 		// out in one frame); a smaller one eases in.
-		_clearancePush = needed >= _clearancePush ? MathF.Min( needed, _clearancePush + ClearanceRise * delta )
-			: MathX.Lerp( _clearancePush, needed, 1f - MathF.Exp( -ClearanceRelease * delta ) );
+		FollowClearance( needed, delta );
 		_clearanceAway = model.Rotation.Inverse * away;
 		_clearanceHand = hand;
 		if ( _clearancePush < 0.01f )
@@ -1266,16 +1326,39 @@ internal sealed class ClipRiderAnimation
 		return held.WithPosition( held.Position + model.Rotation * SkateUnits.ToEngine( _positions[ hand ] - before ) );
 	}
 
-	// With no board in the hand to clear, the arm's reach out from the body eases back in at the release rate rather than
+	// The push (inches) toward what the body needs, as a critically damped spring, in sub-steps short enough to stay
+	// steady at any frame rate; never below nothing.
+	private void FollowClearance( float needed, float delta )
+	{
+		var steps = Math.Max( 1, (int)MathF.Ceiling( delta * ClearanceSteps ) );
+		var step = delta / steps;
+		for ( var i = 0; i < steps; i++ )
+		{
+			var frequency = needed >= _clearancePush ? ClearanceOut : ClearanceIn;
+			_clearanceSpeed += (frequency * frequency * (needed - _clearancePush) - 2f * frequency * _clearanceSpeed) * step;
+			_clearancePush += _clearanceSpeed * step;
+			if ( _clearancePush < 0f )
+			{
+				_clearancePush = 0f;
+				_clearanceSpeed = 0f;
+			}
+		}
+	}
+
+	// Sub-steps per second of the clearance spring.
+	private const float ClearanceSteps = 240f;
+
+	// With no board in the hand to clear, the arm's reach out from the body eases back in as the spring has it rather than
 	// dropping back to the clip's arm in one frame.
 	private void EaseClearanceOut( float delta )
 	{
 		if ( _clearancePush <= 0f )
 			return;
-		_clearancePush = MathX.Lerp( _clearancePush, 0f, 1f - MathF.Exp( -ClearanceRelease * delta ) );
+		FollowClearance( 0f, delta );
 		if ( _clearancePush < 0.01f || !_arms.TryGetValue( _clearanceHand, out var arm ) )
 		{
 			_clearancePush = 0f;
+			_clearanceSpeed = 0f;
 			return;
 		}
 		Reach( arm, _clearanceHand, _positions[ _clearanceHand ] + SkateUnits.ToCore( _clearanceAway * _clearancePush ), true );

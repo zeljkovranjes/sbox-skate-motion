@@ -36,6 +36,12 @@ public sealed class SkateRider : Component
 	/// <summary>Preferred clip style tag (for example a signature set); empty plays the standard motions.</summary>
 	[Property, Group( "Animation" )] public string AnimationStyle { get; set; } = "";
 
+	/// <summary>
+	/// Whether walking and carrying the board answer the controls at once, as a game's own player controller does (quick
+	/// to start, stop and turn); off, the rider eases in and out of a walk as a skater on foot does.
+	/// </summary>
+	[Property, Group( "Controls" )] public bool ResponsiveWalking { get; set; }
+
 	/// <summary>Whether a bailed rider gets up by themselves once they have lain still for a while.</summary>
 	[Property, Group( "Riding" )] public bool RecoverAutomatically { get; set; } = true;
 
@@ -344,6 +350,26 @@ public sealed class SkateRider : Component
 		_sprinting = sprint;
 	}
 
+	// How hard the rider is told to walk, as its clips see it. Walking responsively, the stick let go for under MoveGrace
+	// seconds (going from one key to another) keeps the walk's clips going: seen at once, a gap of a few frames started a
+	// stop clip and ran on out of it, the body snapping between them.
+	private float ShownMoveAmount()
+	{
+		var amount = _walk.WithZ( 0f ).Length;
+		if ( !ResponsiveWalking || amount > 0.01f )
+		{
+			_lastMoveAmount = amount;
+			_moveLetGo = 0f;
+			return amount;
+		}
+		_moveLetGo += Time.Delta;
+		return _moveLetGo < MoveGrace ? _lastMoveAmount : amount;
+	}
+
+	private float _lastMoveAmount;
+	private float _moveLetGo;
+	private const float MoveGrace = 0.1f;
+
 	private bool _sprinting;
 
 	/// <summary>Steps beside the board if there is room, preserving the rider's momentum.</summary>
@@ -514,6 +540,33 @@ public sealed class SkateRider : Component
 	private float BailMass => (Board.Profile?.Mass ?? 80f) - 3f;
 	private float BailGravity => Board.Profile?.Gravity ?? 9.81f;
 
+	// The owner's mode, shared so every other player's copy walks, carries or rides as it does.
+	[Sync] private SkateRiderMode NetMode { get; set; }
+
+	// Another player's rider is not simulated here: its walk is shown from how fast its synced place moves (smoothed
+	// over about a tenth of a second).
+	private Vector3 _proxyVelocity;
+	private Vector3 _proxyLast;
+	private Vector3 ShownVelocity => IsProxy ? _proxyVelocity : _motor.Velocity;
+
+	private void ShowSharedMode()
+	{
+		if ( !_shownBail && NetMode != SkateRiderMode.Bailed && Mode != NetMode )
+			_motor.ShowMode( NetMode );
+		if ( Time.Delta > 0f )
+		{
+			var moved = (WorldPosition - _proxyLast) / Time.Delta;
+			_proxyVelocity = Vector3.Lerp( _proxyVelocity, moved, 1f - MathF.Exp( -10f * Time.Delta ) );
+		}
+		_proxyLast = WorldPosition;
+	}
+
+	/// <summary>
+	/// Blends the rider's first poses from a body pose (model-space bone transforms, in the rider model's bone order)
+	/// over seconds: the player's own body as it was, so taking its place shows no jump.
+	/// </summary>
+	public void BlendFrom( Transform[] modelPose, float seconds ) => _animator?.BlendFrom( modelPose, seconds );
+
 	// Another player's rider: its ragdoll is made here from the owner's bail, and put away when the owner rides again.
 	// Returns true while it lies there, when nothing else of the riding update applies.
 	private bool ShowSharedBail()
@@ -582,6 +635,8 @@ public sealed class SkateRider : Component
 	{
 		if ( _motor is null || !Board.IsValid() ) return;
 		if ( IsProxy && ShowSharedBail() ) return;
+		if ( IsProxy ) ShowSharedMode();
+		else NetMode = Mode;
 		if ( Board.State.IsBailed && Mode == SkateRiderMode.Riding ) OnBoardBailed();
 		if ( Mode == SkateRiderMode.Bailed && _animator.Ragdoll is { } ragdoll ) _motor.FollowRagdoll( ragdoll.Position );
 		PutBoardDown();
@@ -594,14 +649,14 @@ public sealed class SkateRider : Component
 		// Dropping in, the board the clips set down at the lip lies where they have it against where the rider stands there.
 		_animator.BoardRestFrame = IsInteracting ? _interaction.DropInStand : null;
 		if ( PoseThisFrame( out var poseDelta )
-			&& !_animator.UpdateClips( Activity(), Board.State, Board.CurrentInput, _motor.Velocity, Goofy, AnimationStyle, poseDelta,
+			&& !_animator.UpdateClips( Activity(), Board.State, Board.CurrentInput, ShownVelocity, Goofy, AnimationStyle, poseDelta,
 			// Backing out of a drop-in is the stick pulled back from the lip, as the graph's step back reads it.
-			moveAmount: _interaction.BacksOut ? -1f : _walk.WithZ( 0f ).Length, holdingBoard: Mode == SkateRiderMode.Carrying,
+			moveAmount: _interaction.BacksOut ? -1f : ShownMoveAmount(), holdingBoard: Mode == SkateRiderMode.Carrying,
 			hippy: _hippyJump,
 			runout: _runout && IsInteracting, groundSlope: _motor.GroundSlope, edgeDistance: _motor.EdgeDistance,
 			mountHeld: _mountHeld, droppingIn: Mode == SkateRiderMode.Riding && Time.Now - _droppedIn < DroppingIn ) )
 		{
-			_animator.Update( Mode, Board.State, _motor.Velocity, _motor.Grounded, Goofy );
+			_animator.Update( Mode, Board.State, ShownVelocity, _motor.Grounded, Goofy );
 			if ( IsInteracting ) _animator.UpdateInteraction( _interaction, Goofy );
 		}
 		// Down on the ground dark side up the board cannot be ridden on its grip: as the graph's dark ground state has it, the
@@ -745,6 +800,7 @@ public sealed class SkateRider : Component
 	{
 		if ( IsProxy || _motor is null || !Board.IsValid() ) return;
 		_animator.Ragdoll?.Step( Time.Delta );
+		_motor.Responsive = ResponsiveWalking;
 		AutoRecover();
 		if ( Mode == SkateRiderMode.Riding && !IsInteracting )
 			StepHippyJump( Time.Delta );

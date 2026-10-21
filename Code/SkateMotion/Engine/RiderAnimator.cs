@@ -259,6 +259,9 @@ internal sealed class RiderAnimator
 
 	internal void Request( IReadOnlyDictionary<string, string> tags, float seconds ) => _clips?.Request( tags, seconds );
 
+	/// <summary>Blends the clips' first poses from a body pose (see <see cref="Components.SkateRider.BlendFrom"/>).</summary>
+	internal void BlendFrom( Transform[] modelPose, float seconds ) => _clips?.BlendFrom( modelPose, seconds );
+
 	internal IReadOnlyList<string> Actions( string family, string style ) =>
 		_clips?.Actions( family, style ) ?? System.Array.Empty<string>();
 
@@ -769,7 +772,6 @@ internal sealed class RiderAnimator
 	internal void Bail( Vector3 velocity, Vector3 angularVelocity, Vector3 origin, float mass, float gravity )
 	{
 		_visual.Enabled = true;
-		_clips?.Clear();
 		_animation.IkLeftFoot = null;
 		_animation.IkRightFoot = null;
 		_animation.IkRightHand = null;
@@ -777,7 +779,10 @@ internal sealed class RiderAnimator
 		_renderer.ClearIk( "foot_right" );
 		_renderer.ClearIk( "hand_right" );
 		_animation.Enabled = false;
+		// The ragdoll takes up the pose the clips last showed; their bone overrides go only once it has, or it would
+		// start from the model's bind pose.
 		_ragdoll = new( _renderer, velocity, angularVelocity, origin, mass, gravity, _clips?.BoneName( "hips" ) ?? "pelvis", _board );
+		_clips?.Clear();
 	}
 
 	/// <summary>Where the rider's head is shown this frame, or null when the model has no head bone.</summary>

@@ -1,6 +1,23 @@
 # Changelog
 
 ## 2026-10-21
+Title: A Real Grip, Responsive Walking and Riders That Walk for Everyone
+### Added
+# Controls
+Responsive walking - SkateRider.ResponsiveWalking makes walking and carrying the board answer the controls as a game's own player controller does: full speed in about 0.15 s (was 0.36), a stop in about 0.2 s, a turn keeps its speed while the way the rider goes swings round at up to 1080 degrees a second and the body follows at 900, and pushing the stick takes over from a landing's clip. A turn no longer slows the rider into a stop clip and runs on out of it, and letting go for under a tenth of a second (going from one key to another) keeps the walk's clips going. Off (the default) walking eases in and out as before
+# Networking
+Other players walk and carry - another player's rider walks, carries the board and rides as its owner does: the owner's mode is shared, and its walk and run are shown from how fast its synced place moves
+# Animation
+Blend from a body - SkateRider.BlendFrom( modelPose, seconds ) blends the rider's first poses from a body pose (model-space bones in the rider model's order), such as the player's own body as it was, so a rider taking a player's place shows no jump
+### Fixed
+# Animation
+Board resting on the thumb - a carried board was placed by each clip's own grip, and for a rider whose hand differs from the clips' skater that put the deck over the thumb; the fit that moves the deck out of the fingers kept every finger on the side it started on, so it stayed there. In a settled grip the deck now sits between the thumb (over it) and the fingers (under it), and a finger found inside the deck goes clear at once rather than over a few frames
+Board sliding in the hand - followed clip by clip, the board slid up to 1.5 in through the hand between standing, running and the air. It now keeps the place in the hand the clips settle it into as it is taken (over the first half second), as a grip does, and goes wherever the hand goes
+Arm pumping out and in - the arm reaching out to keep the board clear of the legs jumped out up to an inch in a frame and swung out and back with every stride of a run. It now follows as a critically damped spring, quick out and slow back in, and stays out through a run (largest step in a frame 0.32 in)
+Placeholder pose in a hippy jump - a hippy jump that took off while the graph was elsewhere (push and brake let go together before its wind-up, or over a pop's) found no state below the board to play and showed the graph's placeholder: the rider stood upright and still, lifted above the deck. It now comes into the jump's flight by its hurdle (is-hippy-hurdling)
+Ragdoll from the bind pose - a bail cleared the clips' bone overrides before the ragdoll took up the pose, so it could start from the model's bind pose; it now takes the last pose first
+
+## 2026-10-21
 Title: Crowded Servers, Sleeping Boards and No T-Pose
 ### Added
 # Networking

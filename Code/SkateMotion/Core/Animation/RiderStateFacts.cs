@@ -48,6 +48,13 @@ internal sealed class RiderStateFacts
 	/// </summary>
 	internal bool GraphAirDismounting { get; set; }
 
+	/// <summary>
+	/// Whether the graph is in its hippy jump. Told by the graph's player after each update, like <see cref="GraphDark"/>: a
+	/// hippy jump that takes off while the graph is elsewhere (push and brake let go together before the jump's own
+	/// wind-up began, or over a pop's wind-up) comes into the jump's flight by its hurdle.
+	/// </summary>
+	internal bool GraphHippyJump { get; set; }
+
 	// The board is dark side up: the graph holds it so, or the deck shown has stayed upside down and steady.
 	private bool Dark => GraphDark || _darkTime >= DarkHold;
 
@@ -362,6 +369,10 @@ internal sealed class RiderStateFacts
 		known[ "time-to-land" ] = !input.Airborne ? 0f
 			: input.TimeToLand > 0f ? input.TimeToLand : MathF.Max( 0f, 0.6f - _airTime );
 		known[ "ob-time-to-land" ] = input.OffBoard ? input.TimeToLandOnBoard : known[ "time-to-land" ];
+		// Off the board in a hippy jump the graph plays the jump's flight from its own take-off. One that took off while the
+		// graph was elsewhere comes in by the hurdle, the graph's way into the flight from outside; without it nothing
+		// below the board could play and the rider stood in the graph's placeholder, upright and still above the deck.
+		known[ "is-hippy-hurdling" ] = input.OffBoard && !GraphHippyJump ? 1f : 0f;
 		known[ "apex-reached" ] = input.OffBoard ? (input.OffBoardSpeed <= 0f ? 1f : 0f)
 			: input.Airborne && input.VerticalSpeed <= 0f ? 1f : 0f;
 		known[ "is-bumped" ] = 0f;

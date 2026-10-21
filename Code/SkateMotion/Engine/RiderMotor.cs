@@ -123,6 +123,20 @@ internal sealed class RiderMotor
 		new[] { 0f, 4.65f, 6.2f, 10.7f },
 		new[] { 500f, 462f, 288f, 205f } );
 
+	/// <summary>
+	/// Whether walking answers the controls as a game's own player controller does: speed taken up and let go within a
+	/// fraction of a second, turns kept at speed with the body swinging round with them, and the stick taking over from a
+	/// landing's clip. Off, the rider eases into and out of a walk as a skater on foot does.
+	/// </summary>
+	internal bool Responsive { get; set; }
+
+	// Responsive walking: speed changes (m/s^2) starting and stopping, how fast the way it goes turns toward the stick
+	// and how fast the body follows (degrees per second).
+	private const float ResponsiveStart = 30f;
+	private const float ResponsiveStop = 25f;
+	private const float ResponsiveSteer = 1080f;
+	private const float ResponsiveTurn = 900f;
+
 	// Jump take-off speed (m/s) and the share of ground speed kept into it.
 	private const float JumpSpeed = 4.2f;
 	private const float JumpCarry = 0.8f;
@@ -150,7 +164,12 @@ internal sealed class RiderMotor
 		if ( Mode == SkateRiderMode.Carrying )
 			speed = MathF.Min( speed, CarrySpeed );
 		var wish = stick.Normal * (speed * SkateUnits.InchesPerMetre);
-		if ( _walker.IsOnGround )
+		// Pushing the stick, responsive walking goes where it points rather than where a landing's clip carries it.
+		if ( Responsive && wish.LengthSquared > 1f )
+			travel = null;
+		if ( _walker.IsOnGround && Responsive && travel is null )
+			_walker.Velocity = Steer( _walker.Velocity.WithZ( 0f ), wish, delta ).WithZ( _walker.Velocity.z );
+		else if ( _walker.IsOnGround )
 		{
 			// Walking speed moves toward the wished velocity at a set rate: starting, turning, and stopping when the
 			// stick is let go or a runout ends.
@@ -189,11 +208,32 @@ internal sealed class RiderMotor
 		if ( turn && wish.LengthSquared > 1f )
 		{
 			var rate = TurnSpeed.Evaluate( _walker.Velocity.WithZ( 0f ).Length / SkateUnits.InchesPerMetre );
+			if ( Responsive )
+				rate = MathF.Max( rate, ResponsiveTurn );
 			var current = _rider.WorldRotation.Yaw();
 			var wanted = Rotation.LookAt( wish ).Yaw();
 			var change = Math.Clamp( MathX.DeltaDegrees( current, wanted ), -rate * delta, rate * delta );
 			_rider.WorldRotation = Rotation.FromYaw( current + change );
 		}
+	}
+
+	// Responsive walking on the ground: the way it goes turns toward the stick at ResponsiveSteer keeping its speed, and
+	// the speed goes to the stick's at ResponsiveStart or ResponsiveStop, so a turn never slows it into a stop.
+	private static Vector3 Steer( Vector3 planar, Vector3 wish, float delta )
+	{
+		var speed = planar.Length;
+		var wanted = wish.Length;
+		var way = speed > 1f ? planar / speed : wish.LengthSquared > 1f ? wish.Normal : Vector3.Zero;
+		if ( wanted > 1f && speed > 1f )
+		{
+			var from = MathF.Atan2( way.y, way.x ) * 180f / MathF.PI;
+			var to = MathF.Atan2( wish.y, wish.x ) * 180f / MathF.PI;
+			var turned = from + Math.Clamp( MathX.DeltaDegrees( from, to ), -ResponsiveSteer * delta, ResponsiveSteer * delta );
+			way = Rotation.FromYaw( turned ).Forward;
+		}
+		var rate = (wanted > speed ? ResponsiveStart : ResponsiveStop) * SkateUnits.InchesPerMetre * delta;
+		speed = wanted > speed ? MathF.Min( speed + rate, wanted ) : MathF.Max( speed - rate, wanted );
+		return way * speed;
 	}
 
 	// The ground the rider walks on, classed for the walking clips: flat, a ramp or stairs, up or down.
@@ -530,6 +570,13 @@ internal sealed class RiderMotor
 	internal void Bail()
 	{
 		Mode = SkateRiderMode.Bailed;
+		_walker.Enabled = false;
+	}
+
+	/// <summary>Another player's rider: shows the mode its owner is in, without simulating it here.</summary>
+	internal void ShowMode( SkateRiderMode mode )
+	{
+		Mode = mode;
 		_walker.Enabled = false;
 	}
 
