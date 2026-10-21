@@ -23,13 +23,18 @@ internal sealed class HandPoseLayer
 	private readonly SkeletonPose[] _target;
 	private readonly SkeletonPose[] _shown;
 	private readonly Vector3[][] _turning;
-	private readonly AnimationPoseStreamContext _base = new( Commands );
+	private AnimationPoseStreamContext _base = new( Commands );
 	private readonly AnimationPoseStreamContext _overlay = new( Commands );
 	private readonly Dictionary<RawAnimationClip, (AnimationClipClock Clock, AnimationPoseStreamProducer Producer)> _producers = new();
 	private bool _started;
 
-	// Stream commands per hand kept for one frame: a blend of five clips needs about thirty.
+	// Stream commands per hand kept for one frame: a blend of five clips needs about thirty. A larger blend grows the
+	// streams to fit (see Reserve).
 	private const int Commands = 64;
+
+	// Commands one clip of a blend adds to a stream at most: an interpolated key pair (two values, a weight and its
+	// reduction), then its weight against the clips before it and that reduction.
+	private const int CommandsPerClip = 6;
 
 	// Pose operands a stream may stack before it reduces (a five-way blend of interpolated keys needs ten).
 	private const int Operands = 16;
@@ -185,7 +190,9 @@ internal sealed class HandPoseLayer
 		}
 		var phase = time / blend.Duration( parameters );
 		var total = 0f;
-		foreach ( var (leaf, weight) in blend.Weights( parameters ) )
+		var weights = blend.Weights( parameters );
+		Reserve( weights.Count );
+		foreach ( var (leaf, weight) in weights )
 		{
 			var leafPhase = leaf.Looping ? phase - MathF.Floor( phase ) : Math.Clamp( phase, 0f, 1f );
 			if ( weight <= 0f || !Sample( leaf, leafPhase ) )
@@ -194,6 +201,16 @@ internal sealed class HandPoseLayer
 			if ( total > weight )
 				_base.QueueBlend( weight / total );
 		}
+	}
+
+	// Grows the base streams to hold a blend of this many clips, before anything is sampled into them this frame. The
+	// riding blend mixes many clips at once with the stick part way over on a slope, which overran the fixed streams
+	// and threw every frame; a blend of that size reallocates them once.
+	private void Reserve( int clips )
+	{
+		var needed = clips * CommandsPerClip + 2;
+		if ( needed > _base.Capacity )
+			_base = new AnimationPoseStreamContext( Math.Max( needed, _base.Capacity * 2 ) );
 	}
 
 	private bool Sample( AnimationClip clip, float phase )

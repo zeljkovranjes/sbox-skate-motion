@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-21
+Title: Hand Streams on Big Blends, Pushing Past the Stick Crouch
+### Fixed
+# Animation
+Rider update error on ramps and with the stick - the fingers' pose streams were kept in a fixed 64 commands, and the riding blend mixes many clips at once with a controller's stick part way over or on a slope: past about ten clips the stream overflowed and the rider's whole update threw every frame ("Pose commands exceed the allocated stream capacity"). The hand layer now grows its streams to the largest blend it samples, once
+# Input
+Crouching while pushing with the stick forward - a controller's left stick held forward asks for the crouch (to pump through transitions), and it is also how a player rolls straight, so pushing with it held crouched the rider mid-stroke. The stick's crouch now gives way while either device pushes; a pulled trigger and the pump key still crouch
+
 ## 2026-10-20
 Title: Steady Grind Names, Darkslide Outs and Ledge Tops
 ### Added

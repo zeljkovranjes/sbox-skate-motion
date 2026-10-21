@@ -58,8 +58,10 @@ internal static class DeviceInputMerge
 			flickY,
 			keys.Lean != 0f ? keys.Lean : active.LeftStick ? pad.Lean : 0f,
 			keys.Slide || pad.Slide,
-			// The controller crouches with the left stick pulled back or a trigger.
-			keys.Pump || pad.Pump && (active.LeftStick || active.Triggers),
+			// The controller crouches with the left stick forward or a trigger. The stick is also held forward to roll
+			// straight, so its crouch gives way to a push from either device, and the rider pushes rather than crouching
+			// mid-stroke.
+			keys.Pump || pad.Pump && (active.Triggers || active.LeftStick && MathF.Max( keys.Push, pad.Push ) <= 0f),
 			// The triggers are the controller's hands.
 			keys.Grab != 0 ? keys.Grab : active.Triggers ? pad.Grab : 0,
 			keys.Gesture || pad.Gesture,

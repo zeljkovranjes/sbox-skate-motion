@@ -76,6 +76,21 @@ public class DeviceInputMergeTests
 	}
 
 	[Fact]
+	public void TheLeftStickCrouchGivesWayToAPush()
+	{
+		// Held forward to roll straight, the left stick asks for the controller's crouch: pushing at the same time, the
+		// rider pushes instead of crouching mid-stroke, whichever device pushes. A pulled trigger still crouches.
+		var stick = new DeviceActivity( true, false, false );
+		Assert.True( DeviceInputMerge.Board( Controls(), false, Controls( pump: true ), stick ).Pump );
+		Assert.False( DeviceInputMerge.Board( Controls(), false, Controls( push: 1f, pump: true ), stick ).Pump );
+		Assert.False( DeviceInputMerge.Board( Controls( push: 1f ), false, Controls( pump: true ), stick ).Pump );
+		var trigger = new DeviceActivity( true, false, true );
+		Assert.True( DeviceInputMerge.Board( Controls(), false, Controls( push: 1f, pump: true ), trigger ).Pump );
+		// The pump key is the player's own crouch and is kept while pushing.
+		Assert.True( DeviceInputMerge.Board( Controls( push: 1f, pump: true ), false, Controls(), stick ).Pump );
+	}
+
+	[Fact]
 	public void TriggersOnlyGrabAndCrouchWhenPulled()
 	{
 		var resting = new DeviceActivity( false, false, false );

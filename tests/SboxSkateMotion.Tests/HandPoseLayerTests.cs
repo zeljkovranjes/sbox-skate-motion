@@ -112,6 +112,41 @@ public class HandPoseLayerTests
 		Assert.True( Angle( pose.Rotations[ 3 ], half ) < .5f );
 	}
 
+	[Fact]
+	public void ABlendOfManyClipsMixesWithoutOutgrowingItsStreams()
+	{
+		// The riding blend mixes many clips at once when the stick is part way over on a slope: 32 here, each nested level
+		// halving between an open hand and a fist, which overran a 64-word stream and threw every frame.
+		var (layer, body, skeleton, banks) = Setup();
+		var clips = new ClipSet( skeleton, Enumerable.Range( 0, 32 )
+			.Select( i => Clip( $"c{i}", left: i % 2 == 0 ? 0 : 4, right: i % 2 == 0 ? 0 : 4 ) ).ToArray() );
+		var blends = new System.Collections.Generic.Dictionary<string, BlendDefinition>();
+		var level = Enumerable.Range( 0, 32 ).Select( i => $"c{i}" ).ToList();
+		for ( var depth = 1; level.Count > 1; depth++ )
+		{
+			var next = new System.Collections.Generic.List<string>();
+			for ( var i = 0; i < level.Count; i += 2 )
+			{
+				var name = $"mix{depth}_{i / 2}";
+				blends[ name ] = new BlendDefinition
+				{
+					Parameter = $"p{depth}",
+					Children = new() { new BlendChildDefinition { Name = level[ i ], At = 0f }, new BlendChildDefinition { Name = level[ i + 1 ], At = 1f } }
+				};
+				next.Add( name );
+			}
+			level = next;
+		}
+		clips.AddBlends( blends );
+		var parameters = new AnimationParameters();
+		for ( var depth = 1; depth <= 5; depth++ )
+			parameters.Set( $"p{depth}", .5f );
+		var pose = layer.Update( body, clips.Find( level[ 0 ] ), clips.Find( "c0" ).Duration * .5f, parameters, null, 0f );
+		var bank = new AnimationIndexedPoseBank( banks[ 0 ].Bones.Find( "poses" ) );
+		var half = Quaternion.Normalize( Quaternion.Lerp( bank.Sample( 0 ).Rotations[ 0 ], bank.Sample( 4 ).Rotations[ 0 ], .5f ) );
+		Assert.True( Angle( pose.Rotations[ 3 ], half ) < 1f, $"{Angle( pose.Rotations[ 3 ], half )}" );
+	}
+
 	private static float Angle( Quaternion a, Quaternion b ) =>
 		2f * MathF.Acos( Math.Clamp( MathF.Abs( Quaternion.Dot( Quaternion.Normalize( a ), Quaternion.Normalize( b ) ) ), 0f, 1f ) ) * 180f / MathF.PI;
 

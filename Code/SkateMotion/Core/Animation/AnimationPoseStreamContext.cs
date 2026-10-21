@@ -20,6 +20,9 @@ internal sealed class AnimationPoseStreamContext
 	}
 
 	internal int NameCount { get; private set; }
+
+	/// <summary>Commands each stream holds.</summary>
+	internal int Capacity => _commands[ 0 ].Length;
 	internal bool SwapPairs { get; set; }
 	internal AnimationPoseStreamKey GetName( int slot ) => _names[ slot ];
 	internal int GetPairedSlot( int slot ) => _pairedSlots[ slot ];
