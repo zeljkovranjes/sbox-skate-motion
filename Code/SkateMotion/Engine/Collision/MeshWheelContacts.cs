@@ -10,7 +10,8 @@ using NumericsVector = System.Numerics.Vector3;
 /// <summary>Feeds selected map-shape triangles into wheel sweeps while retaining engine surface ownership.</summary>
 internal sealed class MeshWheelContacts
 {
-	private readonly Dictionary<PhysicsShape, MapCollisionShape> _shapes = new();
+	private readonly MapShapeCache _shapes;
+	private readonly HashSet<PhysicsShape> _met = new();
 	private readonly MeshQueryInstance[] _instance = new MeshQueryInstance[ 1 ];
 	private readonly MeshWorldQuery _query = new( 1e-8f, -.00001f, 2.938735877055719e-39f, 1.52587890625e-5f, 1e-6f );
 	private static readonly MeshQueryFilter Surfaces = new( 0, 0, 0, 0, true, false );
@@ -18,20 +19,19 @@ internal sealed class MeshWheelContacts
 	internal long Hits { get; private set; }
 	internal int TriangleCount { get; private set; }
 
+	/// <param name="shapes">The board's read shapes, shared with its contact generation.</param>
+	internal MeshWheelContacts( MapShapeCache shapes ) => _shapes = shapes;
+
 	internal bool Refine( ref SceneTraceResult trace, NumericsVector start, NumericsVector end, float radius )
 	{
 		var shape = trace.Shape;
 		if ( !trace.Hit || trace.StartedSolid || !shape.IsValid()
 			|| !(shape.IsMeshShape || shape.IsHullShape || shape.IsHeightfieldShape) )
 			return trace.Hit;
-		if ( !_shapes.TryGetValue( shape, out var entry ) )
-		{
-			entry = new( shape, (uint)_shapes.Count + 1 );
-			// The engine trace retains the material and dynamic body for friction/reaction.
-			entry.Refresh( static (_, _) => 0 );
-			_shapes.Add( shape, entry );
+		// The engine trace retains the material and dynamic body for friction/reaction.
+		var entry = _shapes.Get( shape, static (_, _) => 0 );
+		if ( _met.Add( shape ) )
 			TriangleCount += entry.Geometry.Triangles.Length;
-		}
 		_instance[ 0 ] = entry.Instance();
 		Queries++;
 		var contact = _query.Evaluate( new( RailEdgeSpace.ToLookup( start ), RailEdgeSpace.ToLookup( end ),
@@ -45,9 +45,10 @@ internal sealed class MeshWheelContacts
 		return true;
 	}
 
+	/// <summary>Starts the count of shapes met over; the shapes keep their triangles in the shared cache.</summary>
 	internal void Clear()
 	{
-		_shapes.Clear();
+		_met.Clear();
 		TriangleCount = 0;
 	}
 }

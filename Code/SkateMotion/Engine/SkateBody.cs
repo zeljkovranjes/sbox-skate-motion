@@ -92,8 +92,10 @@ internal sealed class SkateBody
 				- System.Numerics.Vector3.UnitZ * (Settings.RideHeight - WheelRadius);
 		_assembly = new( Settings, centers, WheelRadius );
 		_pilot = new( Settings );
-		_map = new( body, Settings, WheelRadius );
-		_generatedMap = new( body, Settings, WheelRadius, new CollisionMapContactContext
+		// The wheel sweeps and the contact generation share the board's read collision shapes.
+		var shapes = new MapShapeCache();
+		_map = new( body, Settings, WheelRadius, shapes );
+		_generatedMap = new( body, Settings, WheelRadius, shapes, new CollisionMapContactContext
 		{
 			MaximumExtension = 0x3f000000u,
 			TriangleContext = new( 0x3f7fbe77u, 0x3c23d70au, false )

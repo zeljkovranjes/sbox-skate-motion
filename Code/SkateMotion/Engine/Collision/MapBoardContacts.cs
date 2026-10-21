@@ -17,6 +17,15 @@ internal sealed class MapBoardContacts
 	private const float TruckLengthScale = 1.35f;
 	private const float DefaultWheelWidth = .095f;
 
+	// The map is gathered in a box this many metres each way around the board, and gathered again once the board is
+	// this far from where it last was: a level's collision is never copied whole.
+	private const float WindowReach = 12f;
+	private const float WindowRecentre = 4f;
+
+	// Triangles further than this many metres from every board body are not offered for contacts in a step. The board's
+	// bodies are under half a metre from their centres to their edges and move a few centimetres a step.
+	private const float NearReach = 2f;
+
 	private readonly Rigidbody _deck;
 	private readonly SkateSettings _settings;
 	private readonly MapCollisionSource _source;
@@ -28,6 +37,8 @@ internal sealed class MapBoardContacts
 	private readonly BoardContactBodyBinding[] _bindings = new BoardContactBodyBinding[ 8 ];
 	private readonly Func<PhysicsShape, bool> _represented;
 	private bool _refresh = true;
+	private bool _windowed;
+	private NumericsVector _windowCentre;
 	private bool _slide;
 	private readonly Func<PhysicsShape, bool> _railShape = shape => shape.Collider.IsValid()
 		&& shape.Collider.GameObject.Tags.Has( SkateTags.Grind );
@@ -35,14 +46,15 @@ internal sealed class MapBoardContacts
 	internal int ContactCount => _stream.Count;
 	internal int TriangleCount => _stream.TriangleCount;
 
-	internal MapBoardContacts( Rigidbody deck, SkateSettings settings, float radius,
+	/// <param name="shapes">The board's read shapes, shared with its wheel sweeps.</param>
+	internal MapBoardContacts( Rigidbody deck, SkateSettings settings, float radius, MapShapeCache shapes,
 		CollisionMapContactContext policy, uint duplicateSquaredTolerance, bool deferredReduction )
 	{
 		_deck = deck;
 		_settings = settings;
 		_policy = policy;
 		_source = new( new MeshWorldQuery( 1e-8f, -.00001f,
-			2.938735877055719e-39f, 1.52587890625e-5f, 1e-6f ) );
+			2.938735877055719e-39f, 1.52587890625e-5f, 1e-6f ), shapes );
 		var truckRadius = (TruckDiameterScale * .5f) * radius;
 		var truckHalfLength = (TruckLengthScale * .5f) * DefaultWheelWidth;
 		// The deck's own size, as the board's collider has it: a deck shorter here than there met the floor first through
@@ -88,10 +100,15 @@ internal sealed class MapBoardContacts
 	internal void Step( ArticulatedBoard board, ArticulatedContacts native,
 		bool slide, float steering, float step, bool railSlide = false )
 	{
-		if ( _refresh )
+		var (nearMinimum, nearMaximum, centre) = Near( board );
+		if ( _refresh || !_windowed || NumericsVector.Distance( centre, _windowCentre ) > WindowRecentre )
 		{
 			// The host exposes shape friction but no readable per-face material table.
-			_source.Refresh( _deck.Scene.PhysicsWorld, static (_, _) => 0 );
+			var reach = new Vector3( WindowReach * SkateUnits.InchesPerMetre );
+			var middle = SkateUnits.Inches( centre );
+			_source.Refresh( _deck.Scene.PhysicsWorld, static (_, _) => 0, new BBox( middle - reach, middle + reach ) );
+			_windowCentre = centre;
+			_windowed = true;
 			_refresh = false;
 		}
 		_slide = slide;
@@ -102,9 +119,23 @@ internal sealed class MapBoardContacts
 		for ( var i = 0; i < _front.Length; ++i )
 			_front[ i ] = board.Bodies[ i ].Position;
 		_source.FrontReferences = _front;
-		_stream.Generate( _inputs.Bodies, railSlide ? _railShape : null );
+		_stream.Generate( _inputs.Bodies, nearMinimum, nearMaximum, railSlide ? _railShape : null );
 		board.StepGenerated( _stream.Records, _bindings,
 			native.WithoutGeneratedShapes( _represented ), steering, 0f, step );
+	}
+
+	// The box around every board body that a step's contacts can come from, and the bodies' middle (world metres).
+	private static (NumericsVector Minimum, NumericsVector Maximum, NumericsVector Centre) Near( ArticulatedBoard board )
+	{
+		var low = new NumericsVector( float.MaxValue );
+		var high = new NumericsVector( -float.MaxValue );
+		for ( var i = 0; i < ArticulatedBoard.DynamicCount; ++i )
+		{
+			low = NumericsVector.Min( low, board.Bodies[ i ].Position );
+			high = NumericsVector.Max( high, board.Bodies[ i ].Position );
+		}
+		var reach = new NumericsVector( NearReach );
+		return (low - reach, high + reach, (low + high) * .5f);
 	}
 
 	private CollisionMapContactContext? Bind( PhysicsShape shape )

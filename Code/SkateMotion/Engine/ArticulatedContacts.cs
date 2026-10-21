@@ -28,7 +28,7 @@ internal sealed class ArticulatedContacts
 	private int _count;
 	private readonly DeckManifold _manifold;
 	private readonly DeckManifold _staticManifold;
-	private readonly MeshWheelContacts _mesh = new();
+	private readonly MeshWheelContacts _mesh;
 	private bool _recover;
 	private readonly NumericsVector[] _wheelNormals = new NumericsVector[ 4 ];
 	private readonly NumericsVector[] _wheelPoints = new NumericsVector[ 4 ];
@@ -52,11 +52,13 @@ internal sealed class ArticulatedContacts
 		return _unrepresented.AsSpan( 0, count );
 	}
 
-	internal ArticulatedContacts( Rigidbody deck, SkateSettings settings, float radius )
+	/// <param name="shapes">The board's read collision shapes, shared with its contact generation.</param>
+	internal ArticulatedContacts( Rigidbody deck, SkateSettings settings, float radius, MapShapeCache shapes )
 	{
 		_deck = deck;
 		_settings = settings;
 		_radius = radius;
+		_mesh = new( shapes );
 		_manifold = new( deck );
 		_staticManifold = new( deck, true );
 	}

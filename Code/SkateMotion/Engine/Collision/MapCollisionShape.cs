@@ -11,10 +11,15 @@ internal sealed class MapCollisionShape
 	private uint[] _indices = [];
 	internal PhysicsShape Shape { get; }
 	internal uint Identity { get; }
-	internal bool Seen { get; set; }
 	internal int Filter { get; set; } = -1;
 	internal uint Exclusion { get; set; }
 	internal MeshQueryGeometry Geometry { get; private set; } = new( [], NumericsVector.Zero, NumericsVector.Zero );
+
+	/// <summary>True once the shape's triangles have been read.</summary>
+	internal bool Read { get; private set; }
+
+	/// <summary>Three edge codes per triangle, for the window the shape was last gathered in.</summary>
+	internal byte[] EdgeCodes { get; set; } = [];
 
 	internal MapCollisionShape( PhysicsShape shape, uint identity )
 	{
@@ -37,6 +42,7 @@ internal sealed class MapCollisionShape
 			if ( index >= positions.Length )
 				throw new InvalidOperationException( "Collision shape returned an invalid vertex index." );
 		}
+		Read = true;
 
 		var changed = positions.Length != _positions.Length || indices.Length != _indices.Length;
 		for ( var i = 0; !changed && i < positions.Length; i++ )
@@ -65,7 +71,7 @@ internal sealed class MapCollisionShape
 		}
 		_positions = positions;
 		_indices = indices;
-		Geometry = new( triangles, minimum, maximum );
+		Geometry = new( triangles, minimum, maximum, TriangleGrid.Build( triangles ) );
 		return true;
 	}
 

@@ -51,11 +51,14 @@ internal sealed class MapContactStream
 		_state[ 0x328c / 4 ] = 0x01000000u | (_deferredReduction ? 0x00010000u : 0u);
 	}
 
+	/// <param name="nearMinimum">Lowest corner (world metres) of the box the board's bodies can reach this step.</param>
+	/// <param name="nearMaximum">Highest corner of that box.</param>
 	/// <param name="skip">Shapes the board does not collide with this step, or null.</param>
-	internal void Generate( ReadOnlyMemory<CollisionMapBodyInput> bodies, Func<PhysicsShape, bool> skip = null )
+	internal void Generate( ReadOnlyMemory<CollisionMapBodyInput> bodies, System.Numerics.Vector3 nearMinimum,
+		System.Numerics.Vector3 nearMaximum, Func<PhysicsShape, bool> skip = null )
 	{
 		Reset();
-		TriangleCount = _source.GenerateContacts( bodies, _trackedBinding, _collector, skip );
+		TriangleCount = _source.GenerateContacts( bodies, nearMinimum, nearMaximum, _trackedBinding, _collector, skip );
 		_collector.Flush();
 	}
 

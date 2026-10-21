@@ -11,6 +11,7 @@ internal sealed class MeshWorldQuery
 	private readonly MeshTriangleQuery _triangle;
 	private readonly MeshBoundsQuery _bounds;
 	private readonly float _minimumMovement;
+	private readonly System.Collections.Generic.List<int> _nearby = new();
 
 	internal MeshWorldQuery( float minimumDeterminant, float boundaryTolerance, float featureEpsilon,
 		float minimumMovement, float boundsPadding )
@@ -50,6 +51,18 @@ internal sealed class MeshWorldQuery
 			if ( !_bounds.Intersects( TransformPoint( request.Start, instance.InverseTransform ),
 				TransformPoint( request.End, instance.InverseTransform ), request.Radius, geometry.Minimum, geometry.Maximum ) )
 				continue;
+			// A large shape's grid gives just the triangles whose bounds reach the sweep's, in order; the triangle test
+			// skips every other one anyway.
+			if ( geometry.Grid is { } grid )
+			{
+				grid.Query( localMinimum, localMaximum, _nearby );
+				foreach ( var index in _nearby )
+				{
+					_triangle.Evaluate( request.Start, delta, request.Radius, localMinimum, localMaximum,
+						geometry.Triangles[ index ], instance.Transform, instance.Identity, request.Surfaces, ref result );
+				}
+				continue;
+			}
 			foreach ( var triangle in geometry.Triangles )
 			{
 				_triangle.Evaluate( request.Start, delta, request.Radius, localMinimum, localMaximum,

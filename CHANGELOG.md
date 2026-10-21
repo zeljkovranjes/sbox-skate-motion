@@ -1,8 +1,10 @@
 # Changelog
 
 ## 2026-10-21
-Title: Hand Streams on Big Blends, Pushing Past the Stick Crouch
+Title: Big Maps, Big Blends and Pushing Past the Stick Crouch
 ### Fixed
+# Physics
+Stalls on real maps - the board copied every collider in the scene the moment it started (or was reset) and went through every one of their triangles every physics step, and its wheel sweeps tested every triangle of the collider they hit, which on a level's world mesh is all of it: a map of 20,000 triangles and 300 props ran at 1.6 fps (627 ms frames) and a real map froze the game. The board now gathers only the collision within 12 m of itself, again as it travels, offers each step only the triangles within 2 m of its parts, and finds them through a grid over each large shape, which a board's wheel sweeps and contacts share and read once. The same map rides at 90 fps (11 ms frames, 22 ms at most); 180,000 triangles and 2,000 props, 11 ms (28 ms at most); nearly a million triangles and 5,000 props, 11 ms with one 107 ms frame as the board first reads the floor
 # Animation
 Rider update error on ramps and with the stick - the fingers' pose streams were kept in a fixed 64 commands, and the riding blend mixes many clips at once with a controller's stick part way over or on a slope: past about ten clips the stream overflowed and the rider's whole update threw every frame ("Pose commands exceed the allocated stream capacity"). The hand layer now grows its streams to the largest blend it samples, once
 # Input

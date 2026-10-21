@@ -11,19 +11,22 @@ using NumericsVector = System.Numerics.Vector3;
 internal sealed partial class MapCollisionSource
 {
 	private readonly MeshWorldQuery _query;
-	private readonly Dictionary<PhysicsShape, MapCollisionShape> _shapes = new();
+	private readonly MapShapeCache _shapes;
 	private readonly List<MapCollisionShape> _ordered = new();
-	private readonly List<PhysicsShape> _removed = new();
 	private MeshQueryInstance[] _instances = [];
 	private readonly GrindEdgeRecord[] _candidateEdges = new GrindEdgeRecord[ GrindEdgeQuery.Capacity ];
 	private readonly GrindScoringCandidate[] _scoringCandidates = new GrindScoringCandidate[ 7 ];
-	private uint _nextIdentity;
 	internal int ShapeCount => _ordered.Count;
 	internal int TriangleCount { get; private set; }
 	internal int UnsupportedShapeCount { get; private set; }
-	internal int GeometryBuilds { get; private set; }
+	internal int GeometryBuilds => _shapes.GeometryBuilds;
 
-	internal MapCollisionSource( MeshWorldQuery query ) => _query = query;
+	/// <param name="shapes">The board's read shapes, shared with its wheel sweeps.</param>
+	internal MapCollisionSource( MeshWorldQuery query, MapShapeCache shapes )
+	{
+		_query = query;
+		_shapes = shapes;
+	}
 
 	/// <summary>Runs candidate selection in query-space metres using the current map snapshot.</summary>
 	internal bool SelectCandidate( GrindCandidateSelection selection, GrindCandidateSelectionInput input,
@@ -64,17 +67,21 @@ internal sealed partial class MapCollisionSource
 		};
 	}
 
-	internal void Refresh( PhysicsWorld world, Func<PhysicsShape, int, ushort> material )
+	/// <summary>
+	/// Gathers the shapes of every body reaching into <paramref name="window"/> (world inches), reading a shape's
+	/// triangles the first time it is gathered. Only what is around the board is gathered: copying every collider in a
+	/// level, and going through all of it every step, stalled the game on a real map.
+	/// </summary>
+	internal void Refresh( PhysicsWorld world, Func<PhysicsShape, int, ushort> material, BBox window )
 	{
 		ArgumentNullException.ThrowIfNull( world );
 		ArgumentNullException.ThrowIfNull( material );
-		foreach ( var entry in _shapes.Values ) entry.Seen = false;
 		_ordered.Clear();
 		TriangleCount = 0;
 		UnsupportedShapeCount = 0;
 		foreach ( var body in world.Bodies )
 		{
-			if ( !body.IsValid() ) continue;
+			if ( !body.IsValid() || !body.GetBounds().Overlaps( window ) ) continue;
 			foreach ( var shape in body.Shapes )
 			{
 				if ( !shape.IsValid() || shape.IsTrigger || !shape.EnableSolidCollisions ) continue;
@@ -83,29 +90,18 @@ internal sealed partial class MapCollisionSource
 					UnsupportedShapeCount++;
 					continue;
 				}
-				if ( !_shapes.TryGetValue( shape, out var entry ) )
-				{
-					entry = new( shape, checked(++_nextIdentity) );
-					_shapes.Add( shape, entry );
-				}
-				// Triangulate allocates in the engine. Refresh is an explicit geometry-change
-				// operation; ordinary queries update only body transforms and enabled state.
-				if ( entry.Refresh( material ) ) GeometryBuilds++;
-				entry.Seen = true;
+				// Ordinary queries update only body transforms and enabled state.
+				var entry = _shapes.Get( shape, material );
 				_ordered.Add( entry );
 				TriangleCount += entry.Geometry.Triangles.Length;
 				if ( entry.Geometry.Triangles.Length == 0 ) UnsupportedShapeCount++;
 			}
 		}
-		_removed.Clear();
-		foreach ( var pair in _shapes )
-		{
-			if ( !pair.Value.Seen ) _removed.Add( pair.Key );
-		}
-		foreach ( var shape in _removed ) _shapes.Remove( shape );
+		// Shapes outside the window keep their triangles for when the board comes back; only ones that are gone go.
+		_shapes.Prune();
 		if ( _instances.Length != _ordered.Count ) _instances = new MeshQueryInstance[ _ordered.Count ];
 		UpdateTransforms();
-		BuildEdgeCodes();
+		BuildEdgeCodes( window );
 	}
 
 	internal void UpdateTransforms()
@@ -115,7 +111,7 @@ internal sealed partial class MapCollisionSource
 
 	internal bool SetQueryFilter( PhysicsShape shape, int filter, uint exclusion )
 	{
-		if ( !shape.IsValid() || !_shapes.TryGetValue( shape, out var entry ) ) return false;
+		if ( !shape.IsValid() || !_shapes.TryGet( shape, out var entry ) ) return false;
 		entry.Filter = filter;
 		entry.Exclusion = exclusion;
 		return true;
