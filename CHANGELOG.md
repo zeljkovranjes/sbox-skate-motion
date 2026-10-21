@@ -1,6 +1,27 @@
 # Changelog
 
 ## 2026-10-21
+Title: Crowded Servers, Sleeping Boards and No T-Pose
+### Added
+# Networking
+Boards simulated by their owner - a board is now simulated by its network owner, or by the host when it has none, instead of always by the host. Give the rider ownership (GameObject.Network.AssignOwnership) and the rider's own client simulates the board it rides: its input reaches the board with no round trip, and the host pays for no board but those nobody owns. A peer taking a board over carries on from where the board was last seen; input set where a board is not simulated goes to its owner (from the driver only, which the host still chooses). The board's synced state (speed, wheels, air, bail, balance, grind) is written by whoever simulates it
+Bails seen by everyone - another player's rider falls as the rider's owner saw it: the owner's bail (and how the board was moving as it let go) is shared, each client ragdolls its own copy of that rider, and puts it away when the rider is back on the board. The bail's release velocity, position and spin now reach a rider driving from a client too, so its ragdoll flies with the board's speed instead of dropping where it stood
+# Performance
+Sleeping boards - a board no one rides that has lain within half an inch and a degree of where it was for a second falls asleep (Skateboard.Asleep): its step is skipped until it is ridden, moved (picked up, knocked, placed) or reset, and it wakes carrying on from where it was put. Most boards in a busy game are lying about; asleep they cost nothing
+Distance posing - another player's rider far from the camera is posed less often: every second frame from 12 m, every fourth from 24 m and every eighth from 48 m, each pose covering the time since the last. A crowd of riders costs about what a few near ones do; the player's own rider is posed every frame
+# Physics
+Hardest landing - Skateboard.HardestLanding sets the speed into the ground (m/s) above which a landing bails, in place of the profile's (zero keeps it): a flat landing off a 3 m drop comes down at about 7.7 m/s, off 6 m about 10.8 and off 10 m about 14. A landing tipped too far still bails at any speed
+### Fixed
+# Animation
+T-pose at the start of a ride - a new rider's first frames (and, for a moment, any state the graph enters from nothing) gave no usable pose, empty or NaN bone rotations, and the model drew its bind pose, standing straight up in a T, until the graph's first blend finished (about 0.2 s; over a second when the clips loaded on the same frame). The rider's model is now hidden until its first usable pose, posed the frame it appears, and a frame without a usable pose keeps the last one (SkeletonPose.Usable)
+Rider teardown before its start - a rider removed before it started threw from OnDisabled
+# Performance
+Map gathering on real levels - a level's world body is a great many small shapes and reaches into every window, and the window kept every shape of a body that did: on a dense level each gathering welded the edges of 25,000 triangles (12-15 ms, a hitch every few metres) and every physics substep walked every shape (0.22 ms). Only shapes whose own bounds reach into the window are kept now: the same ride gathers 30 to 90 triangles (0.55 ms) and a substep's contacts take 0.02 ms. A ridden board's whole step on that level went from 2.2 ms to about 1.3 ms
+Edge welding - the same edge codes from storage without a list per edge or per grid cell, and the resting-surface grid built only when an open edge needs it: 1.4 to 1.8 times faster on 7,500 and 47,000 triangle meshes, identical codes on those and on 300 random meshes. A gathering resets only the codes the last window wrote, not a whole level mesh's
+# Physics
+Window - the map is gathered 4 m each way around the board and gathered again after 2 m (was 12 m and 4 m), contacts offered from 1 m around its bodies (was 2 m): every contact a step can take stays inside the window with 0.7 m to spare
+
+## 2026-10-21
 Title: Big Maps, Big Blends and Pushing Past the Stick Crouch
 ### Fixed
 # Physics

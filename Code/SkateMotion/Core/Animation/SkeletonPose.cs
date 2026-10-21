@@ -25,6 +25,25 @@ internal sealed class SkeletonPose
 	internal float[] BoneWeights { get; }
 	internal Vector4[] Scales { get; }
 
+	/// <summary>
+	/// Whether every bone has a finite place and a real rotation. A pose not yet written (all rotations zero) or one
+	/// blended from nothing (NaN) is not: put on a model, its bones fall back to the bind pose.
+	/// </summary>
+	internal bool Usable
+	{
+		get
+		{
+			for ( var bone = 0; bone < Rotations.Length; bone++ )
+			{
+				var position = Positions[ bone ];
+				if ( !(Rotations[ bone ].LengthSquared() > 0.5f)
+					|| !float.IsFinite( position.X ) || !float.IsFinite( position.Y ) || !float.IsFinite( position.Z ) )
+					return false;
+			}
+			return true;
+		}
+	}
+
 	internal void SetRest( ClipSkeleton skeleton )
 	{
 		skeleton.RestPositions.CopyTo( Positions, 0 );

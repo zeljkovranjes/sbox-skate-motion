@@ -18,13 +18,15 @@ internal sealed class MapBoardContacts
 	private const float DefaultWheelWidth = .095f;
 
 	// The map is gathered in a box this many metres each way around the board, and gathered again once the board is
-	// this far from where it last was: a level's collision is never copied whole.
-	private const float WindowReach = 12f;
-	private const float WindowRecentre = 4f;
+	// this far from where it last was: a level's collision is never copied whole. Each gathering welds the edges of every
+	// triangle in the box, so the box is kept small: the contacts a step takes (NearReach about the board's bodies, which
+	// reach under half a metre from its middle) stay inside it until it is gathered again, with 0.7 m to spare.
+	private const float WindowReach = 4f;
+	private const float WindowRecentre = 2f;
 
 	// Triangles further than this many metres from every board body are not offered for contacts in a step. The board's
-	// bodies are under half a metre from their centres to their edges and move a few centimetres a step.
-	private const float NearReach = 2f;
+	// bodies are under half a metre from their centres to their edges and move under 10 cm a step even at 20 m/s.
+	private const float NearReach = 1f;
 
 	private readonly Rigidbody _deck;
 	private readonly SkateSettings _settings;

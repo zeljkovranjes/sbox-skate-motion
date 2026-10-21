@@ -214,7 +214,8 @@ internal sealed class RiderAnimator
 	{
 		_rider = rider;
 		_board = board;
-		_visual = new GameObject( rider, true, "Rider Model" );
+		// Hidden until it is first posed: a model shown before then stands in its bind pose (the T) for a frame or more.
+		_visual = new GameObject( rider, false, "Rider Model" );
 		_renderer = _visual.Components.Create<SkinnedModelRenderer>();
 		_renderer.Model = model ?? Model.Load( "models/citizen/citizen.vmdl" );
 		_leftAnkle = _renderer.Model.GetBoneTransform( "ankle_L" );
@@ -752,6 +753,7 @@ internal sealed class RiderAnimator
 	internal void Update( SkateRiderMode mode, SkateState board, Vector3 velocity, bool grounded, bool goofy )
 	{
 		if ( mode == SkateRiderMode.Bailed ) return;
+		_visual.Enabled = true;
 		var riding = mode == SkateRiderMode.Riding;
 		_visual.LocalRotation = Rotation.FromYaw( riding ? (goofy ? 90f : -90f) : 0f );
 		UpdateDefaultFeet( goofy );
@@ -766,6 +768,7 @@ internal sealed class RiderAnimator
 
 	internal void Bail( Vector3 velocity, Vector3 angularVelocity, Vector3 origin, float mass, float gravity )
 	{
+		_visual.Enabled = true;
 		_clips?.Clear();
 		_animation.IkLeftFoot = null;
 		_animation.IkRightFoot = null;

@@ -21,6 +21,9 @@ internal sealed class MapCollisionShape
 	/// <summary>Three edge codes per triangle, for the window the shape was last gathered in.</summary>
 	internal byte[] EdgeCodes { get; set; } = [];
 
+	/// <summary>The triangles whose edge codes that window wrote; every other triangle holds the default.</summary>
+	internal System.Collections.Generic.List<int> Written { get; } = new();
+
 	internal MapCollisionShape( PhysicsShape shape, uint identity )
 	{
 		Shape = shape;

@@ -682,6 +682,10 @@ internal sealed class ClipRiderAnimation
 			_parameters, carryHand >= 0 ? _retargeter.SourceBone( carryHand, mirror ) : -1, _anchor );
 		if ( requested )
 			_graph.Update( _parameters, delta, _motionPose );
+		// A graph's first frames as its first state blends in can give no usable pose: the body keeps the last one it
+		// showed (a new rider stays hidden until it has one) rather than dropping into its bind pose, the T.
+		if ( !(requested ? _motionPose : _statePose).Usable )
+			return;
 		ShowSource( requested ? _motionPose : _statePose, requested, delta );
 		// The board is dark side up while the graph is in a state that holds it so; the facts carry that into the next
 		// frame, so the graph's dark states can follow one another.
@@ -910,6 +914,11 @@ internal sealed class ClipRiderAnimation
 			_shownMirror = mirror;
 			_shownBoard = riding ? _skateboard?.RenderTransform : null;
 		}
+		// The model is shown from the first pose on (see RiderAnimator), never in its bind pose: the frame it appears its
+		// bones take the pose at once, rather than at the next animation update.
+		var appearing = _shownValid && !_renderer.GameObject.Enabled;
+		if ( appearing )
+			_renderer.GameObject.Enabled = true;
 		var scene = _renderer.SceneModel;
 		if ( scene is null )
 			return;
@@ -919,6 +928,8 @@ internal sealed class ClipRiderAnimation
 				SkateUnits.ToEngine( _retargeter.ToModel( _rotations[ bone ] ) ) );
 			scene.SetBoneOverride( bone, in transform );
 		}
+		if ( appearing )
+			scene.Update( 0f );
 	}
 
 	// The clip whose hand streams pose the fingers, and how far into it the body is: the state graph's own, or a

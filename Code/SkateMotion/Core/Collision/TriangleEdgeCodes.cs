@@ -32,8 +32,8 @@ internal static class TriangleEdgeCodes
 			throw new ArgumentOutOfRangeException( nameof( weld ) );
 		var count = a.Length;
 		var corners = new int[ count * 3 ];
-		var points = new Dictionary<(long, long, long), int>();
-		var positions = new List<Vector3>();
+		var points = new Dictionary<PointKey, int>( count * 3 );
+		var positions = new List<Vector3>( count * 3 );
 		for ( var i = 0; i < count; ++i )
 		{
 			corners[ i * 3 ] = Weld( a[ i ], weld, points, positions );
@@ -46,36 +46,49 @@ internal static class TriangleEdgeCodes
 			var normal = Vector3.Cross( b[ i ] - a[ i ], c[ i ] - a[ i ] );
 			normals[ i ] = normal.LengthSquared() > 0f ? Vector3.Normalize( normal ) : Vector3.Zero;
 		}
-		var edges = new Dictionary<(int, int), List<int>>();
+		// Each edge's sides, in the order its corners come: how many faces share it and, for two, which they are.
+		var slots = new Dictionary<EdgeKey, int>( count * 3 );
+		var edgeOf = new int[ count * 3 ];
+		var sideCount = new int[ count * 3 ];
+		var firstSide = new int[ count * 3 ];
+		var secondSide = new int[ count * 3 ];
 		for ( var i = 0; i < count * 3; ++i )
 		{
-			var key = Key( corners[ i ], corners[ Next( i ) ] );
-			if ( key.Item1 == key.Item2 )
+			var (first, second) = Key( corners[ i ], corners[ Next( i ) ] );
+			if ( first == second )
+			{
+				edgeOf[ i ] = -1;
 				continue;
-			if ( !edges.TryGetValue( key, out var sides ) )
-				edges[ key ] = sides = new List<int>( 2 );
-			sides.Add( i );
+			}
+			var key = new EdgeKey( first, second );
+			if ( !slots.TryGetValue( key, out var slot ) )
+				slots[ key ] = slot = slots.Count;
+			edgeOf[ i ] = slot;
+			if ( sideCount[ slot ] == 0 )
+				firstSide[ slot ] = i;
+			else if ( sideCount[ slot ] == 1 )
+				secondSide[ slot ] = i;
+			sideCount[ slot ]++;
 		}
 
-		var grid = new SurfaceGrid( a, b, c, normals );
+		// Built only once an open edge needs it.
+		SurfaceGrid grid = null;
 		var codes = new byte[ count * 3 ];
 		// A corner stays open for vertex contacts while any edge through it is open or a real ridge.
 		var openCorner = new bool[ positions.Count ];
 		for ( var i = 0; i < count * 3; ++i )
 		{
 			var face = i / 3;
-			var key = Key( corners[ i ], corners[ Next( i ) ] );
-			var degenerate = key.Item1 == key.Item2;
-			List<int> sides = null;
-			if ( !degenerate )
-				edges.TryGetValue( key, out sides );
-			if ( degenerate || sides is not { Count: 2 } )
+			var edge = edgeOf[ i ];
+			var degenerate = edge < 0;
+			var sides = degenerate ? 0 : sideCount[ edge ];
+			if ( degenerate || sides != 2 )
 			{
 				// An open edge resting on another surface (a ramp placed on a floor) joins that surface instead.
 				var start = positions[ corners[ i ] ];
 				var end = positions[ corners[ Next( i ) ] ];
-				var support = degenerate || sides is { Count: > 2 } ? -1
-					: grid.Support( start, end, normals[ face ], face, a, b, c, normals );
+				var support = degenerate || sides > 2 ? -1
+					: (grid ??= new SurfaceGrid( a, b, c, normals )).Support( start, end, normals[ face ], face, a, b, c, normals );
 				if ( support < 0 )
 				{
 					codes[ i ] = Open;
@@ -93,7 +106,7 @@ internal static class TriangleEdgeCodes
 				openCorner[ corners[ i ] ] = openCorner[ corners[ Next( i ) ] ] = true;
 				continue;
 			}
-			var other = sides[ 0 ] == i ? sides[ 1 ] : sides[ 0 ];
+			var other = firstSide[ edge ] == i ? secondSide[ edge ] : firstSide[ edge ];
 			var neighbour = other / 3;
 			var cosine = Math.Clamp( Vector3.Dot( normals[ face ], normals[ neighbour ] ), -1f, 1f );
 			// The neighbour's far corner below this face's plane means the surface folds away: a ridge.
@@ -134,9 +147,9 @@ internal static class TriangleEdgeCodes
 
 	private static (int, int) Key( int first, int second ) => first < second ? (first, second) : (second, first);
 
-	private static int Weld( Vector3 point, float weld, Dictionary<(long, long, long), int> points, List<Vector3> positions )
+	private static int Weld( Vector3 point, float weld, Dictionary<PointKey, int> points, List<Vector3> positions )
 	{
-		var key = ((long)MathF.Round( point.X / weld ), (long)MathF.Round( point.Y / weld ), (long)MathF.Round( point.Z / weld ));
+		var key = new PointKey( (long)MathF.Round( point.X / weld ), (long)MathF.Round( point.Y / weld ), (long)MathF.Round( point.Z / weld ) );
 		if ( points.TryGetValue( key, out var index ) )
 			return index;
 		points[ key ] = positions.Count;
@@ -144,11 +157,60 @@ internal static class TriangleEdgeCodes
 		return positions.Count - 1;
 	}
 
-	// Triangles bucketed by the cells their bounds cover, to find what an open edge rests on without a full scan.
+	// A welded corner's place in weld steps, hashed without the general tuple comparer.
+	private readonly struct PointKey : IEquatable<PointKey>
+	{
+		private readonly long _x, _y, _z;
+
+		internal PointKey( long x, long y, long z )
+		{
+			_x = x;
+			_y = y;
+			_z = z;
+		}
+
+		public bool Equals( PointKey other ) => _x == other._x && _y == other._y && _z == other._z;
+
+		public override bool Equals( object other ) => other is PointKey key && Equals( key );
+
+		public override int GetHashCode() => Mix( _x * 73856093L ^ _y * 19349663L ^ _z * 83492791L );
+	}
+
+	// An edge by its two welded corners, lower first. (A long holding both would hash as the two halves XORed together,
+	// alike for countless edges.)
+	private readonly struct EdgeKey : IEquatable<EdgeKey>
+	{
+		private readonly int _first, _second;
+
+		internal EdgeKey( int first, int second )
+		{
+			_first = first;
+			_second = second;
+		}
+
+		public bool Equals( EdgeKey other ) => _first == other._first && _second == other._second;
+
+		public override bool Equals( object other ) => other is EdgeKey key && Equals( key );
+
+		public override int GetHashCode() => Mix( (long)_first * 0x7FFFFFFFL + _second );
+	}
+
+	private static int Mix( long value )
+	{
+		var mixed = (ulong)value * 0x9E3779B97F4A7C15UL;
+		return (int)(mixed >> 32) ^ (int)mixed;
+	}
+
+	// Triangles bucketed by the cells their bounds cover, to find what an open edge rests on without a full scan. Each
+	// cell's triangles are a chain through shared arrays, in the order they were added, rather than a list of its own.
 	private sealed class SurfaceGrid
 	{
 		private const float Cell = 1f;
-		private readonly Dictionary<(int, int, int), List<int>> _cells = new();
+		private readonly Dictionary<CellKey, int> _cells = new();
+		private readonly List<int> _first = new();
+		private readonly List<int> _last = new();
+		private readonly List<int> _triangle = new();
+		private readonly List<int> _next = new();
 
 		internal SurfaceGrid( ReadOnlySpan<Vector3> a, ReadOnlySpan<Vector3> b, ReadOnlySpan<Vector3> c, Vector3[] normals )
 		{
@@ -167,17 +229,46 @@ internal static class TriangleEdgeCodes
 				for ( var x = low.Item1; x <= high.Item1; ++x )
 				for ( var y = low.Item2; y <= high.Item2; ++y )
 				for ( var z = low.Item3; z <= high.Item3; ++z )
-					Add( (x, y, z), i );
+					Add( new CellKey( x, y, z ), i );
 			}
 		}
 
 		private readonly List<int> _large = new();
 
-		private void Add( (int, int, int) cell, int triangle )
+		private void Add( CellKey cell, int triangle )
 		{
-			if ( !_cells.TryGetValue( cell, out var list ) )
-				_cells[ cell ] = list = new List<int>( 4 );
-			list.Add( triangle );
+			if ( !_cells.TryGetValue( cell, out var slot ) )
+			{
+				_cells[ cell ] = slot = _first.Count;
+				_first.Add( -1 );
+				_last.Add( -1 );
+			}
+			var entry = _triangle.Count;
+			_triangle.Add( triangle );
+			_next.Add( -1 );
+			if ( _last[ slot ] < 0 )
+				_first[ slot ] = entry;
+			else
+				_next[ _last[ slot ] ] = entry;
+			_last[ slot ] = entry;
+		}
+
+		private readonly struct CellKey : IEquatable<CellKey>
+		{
+			private readonly int _x, _y, _z;
+
+			internal CellKey( int x, int y, int z )
+			{
+				_x = x;
+				_y = y;
+				_z = z;
+			}
+
+			public bool Equals( CellKey other ) => _x == other._x && _y == other._y && _z == other._z;
+
+			public override bool Equals( object other ) => other is CellKey key && Equals( key );
+
+			public override int GetHashCode() => Mix( _x * 73856093L ^ _y * 19349663L ^ _z * 83492791L );
 		}
 
 		private static (int, int, int) Cells( Vector3 point ) =>
@@ -190,14 +281,27 @@ internal static class TriangleEdgeCodes
 			var middle = (start + end) * 0.5f;
 			var best = -1;
 			var bestGap = float.MaxValue;
-			_cells.TryGetValue( Cells( middle ), out var local );
+			var (x, y, z) = Cells( middle );
+			var entry = _cells.TryGetValue( new CellKey( x, y, z ), out var slot ) ? _first[ slot ] : -1;
 			for ( var pass = 0; pass < 2; ++pass )
 			{
-				var candidates = pass == 0 ? local : _large;
-				if ( candidates is null )
-					continue;
-				foreach ( var other in candidates )
+				var large = 0;
+				while ( true )
 				{
+					int other;
+					if ( pass == 0 )
+					{
+						if ( entry < 0 )
+							break;
+						other = _triangle[ entry ];
+						entry = _next[ entry ];
+					}
+					else
+					{
+						if ( large >= _large.Count )
+							break;
+						other = _large[ large++ ];
+					}
 					if ( other == self || Vector3.Dot( normals[ other ], normal ) <= 0f )
 						continue;
 					var n = normals[ other ];

@@ -379,6 +379,7 @@ public sealed class SkateRider : Component
 		if ( IsProxy || _motor is null ) return false;
 		if ( Mode == SkateRiderMode.Carrying && !Drop() ) return false;
 		if ( !_motor.Mount() ) return false;
+		NetBailed = false;
 		Board.TurnUpright();
 		Board.SetRiderAttached( true );
 		Board.ResetSimulation();
@@ -390,6 +391,7 @@ public sealed class SkateRider : Component
 	{
 		if ( IsProxy || _motor is null || !_motor.Recover( _animator.Ragdoll ) ) return false;
 		_animator.Recover( GameObject );
+		NetBailed = false;
 		_walk = Vector3.Zero;
 		_jump = false;
 		return true;
@@ -493,10 +495,40 @@ public sealed class SkateRider : Component
 	{
 		if ( IsProxy || _motor is null || Mode != SkateRiderMode.Riding ) return;
 		_motor.FollowBoard();
-		_animator.Bail( Board.ReleaseVelocity, Board.ReleaseAngularVelocity, Board.ReleasePosition,
-			(Board.Profile?.Mass ?? 80f) - 3f, Board.Profile?.Gravity ?? 9.81f );
+		NetBailVelocity = Board.ReleaseVelocity;
+		NetBailSpin = Board.ReleaseAngularVelocity;
+		NetBailOrigin = Board.ReleasePosition;
+		NetBailed = true;
+		_animator.Bail( NetBailVelocity, NetBailSpin, NetBailOrigin, BailMass, BailGravity );
 		_motor.Bail();
 		Board.SetRiderAttached( false );
+	}
+
+	// The owner's bail, shared so every other player sees the rider fall: that it let go, and how it was moving then.
+	[Sync] private bool NetBailed { get; set; }
+	[Sync] private Vector3 NetBailVelocity { get; set; }
+	[Sync] private Vector3 NetBailSpin { get; set; }
+	[Sync] private Vector3 NetBailOrigin { get; set; }
+	private bool _shownBail;
+
+	private float BailMass => (Board.Profile?.Mass ?? 80f) - 3f;
+	private float BailGravity => Board.Profile?.Gravity ?? 9.81f;
+
+	// Another player's rider: its ragdoll is made here from the owner's bail, and put away when the owner rides again.
+	// Returns true while it lies there, when nothing else of the riding update applies.
+	private bool ShowSharedBail()
+	{
+		if ( NetBailed && !_shownBail )
+		{
+			_animator.Bail( NetBailVelocity, NetBailSpin, NetBailOrigin, BailMass, BailGravity );
+			_shownBail = true;
+		}
+		else if ( !NetBailed && _shownBail )
+		{
+			_animator.Recover( GameObject );
+			_shownBail = false;
+		}
+		return _shownBail;
 	}
 
 	protected override void OnEnabled()
@@ -506,7 +538,8 @@ public sealed class SkateRider : Component
 
 	protected override void OnDisabled()
 	{
-		if ( !Board.IsValid() ) return;
+		// Taken away before it started, it never subscribed.
+		if ( !Board.IsValid() || _animator is null ) return;
 		Board.Bailed -= OnBoardBailed;
 		Board.Collided -= OnBoardCollided;
 		Board.RunoutRequested -= OnRunout;
@@ -548,8 +581,9 @@ public sealed class SkateRider : Component
 	protected override void OnUpdate()
 	{
 		if ( _motor is null || !Board.IsValid() ) return;
+		if ( IsProxy && ShowSharedBail() ) return;
 		if ( Board.State.IsBailed && Mode == SkateRiderMode.Riding ) OnBoardBailed();
-		if ( Mode == SkateRiderMode.Bailed ) _motor.FollowRagdoll( _animator.Ragdoll.Position );
+		if ( Mode == SkateRiderMode.Bailed && _animator.Ragdoll is { } ragdoll ) _motor.FollowRagdoll( ragdoll.Position );
 		PutBoardDown();
 		_motor.FollowBoard();
 		// On foot the animation is told whether the rider stands or is in the air (a jump, a fall, a step off up high).
@@ -559,7 +593,8 @@ public sealed class SkateRider : Component
 		_animator.PlantLip = Board.HandPlantLip;
 		// Dropping in, the board the clips set down at the lip lies where they have it against where the rider stands there.
 		_animator.BoardRestFrame = IsInteracting ? _interaction.DropInStand : null;
-		if ( !_animator.UpdateClips( Activity(), Board.State, Board.CurrentInput, _motor.Velocity, Goofy, AnimationStyle, Time.Delta,
+		if ( PoseThisFrame( out var poseDelta )
+			&& !_animator.UpdateClips( Activity(), Board.State, Board.CurrentInput, _motor.Velocity, Goofy, AnimationStyle, poseDelta,
 			// Backing out of a drop-in is the stick pulled back from the lip, as the graph's step back reads it.
 			moveAmount: _interaction.BacksOut ? -1f : _walk.WithZ( 0f ).Length, holdingBoard: Mode == SkateRiderMode.Carrying,
 			hippy: _hippyJump,
@@ -655,6 +690,30 @@ public sealed class SkateRider : Component
 	{
 		var camera = Scene.Camera;
 		return camera.IsValid() ? Rotation.FromYaw( camera.WorldRotation.Yaw() ) * move : WorldRotation * move;
+	}
+
+	// Another player's rider far from the camera is posed less often: from LodNear metres every second frame, then every
+	// fourth from twice that and every eighth from four times it, each pose covering the time since the last. A crowd of
+	// riders then costs about what a few near ones do; the player's own rider is posed every frame.
+	private const float LodNear = 12f;
+	private int _lodFrame;
+	private float _lodDelta;
+
+	private bool PoseThisFrame( out float delta )
+	{
+		_lodDelta += Time.Delta;
+		delta = _lodDelta;
+		var every = 1;
+		if ( IsProxy && Scene.Camera is { } camera )
+		{
+			var metres = camera.WorldPosition.Distance( WorldPosition ) / SkateUnits.InchesPerMetre;
+			every = metres < LodNear ? 1 : metres < LodNear * 2f ? 2 : metres < LodNear * 4f ? 4 : 8;
+		}
+		if ( ++_lodFrame < every )
+			return false;
+		_lodFrame = 0;
+		_lodDelta = 0f;
+		return true;
 	}
 
 	private RiderActivity Activity()

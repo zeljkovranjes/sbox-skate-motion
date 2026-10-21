@@ -170,14 +170,26 @@ internal sealed partial class MapCollisionSource
 			var entry = _ordered[ shape ];
 			var length = _instances[ shape ].Geometry.Triangles.Length * 3;
 			if ( entry.EdgeCodes.Length != length )
+			{
 				entry.EdgeCodes = new byte[ length ];
-			if ( _instances[ shape ].Geometry.Grid is not null )
 				Array.Fill( entry.EdgeCodes, TriangleEdgeCodes.Convex );
+				entry.Written.Clear();
+			}
+			// Only what the last window wrote goes back to the default: a level's mesh, millions of edges, is not filled
+			// again on every gathering.
+			foreach ( var was in entry.Written )
+			{
+				entry.EdgeCodes[ was * 3 ] = TriangleEdgeCodes.Convex;
+				entry.EdgeCodes[ was * 3 + 1 ] = TriangleEdgeCodes.Convex;
+				entry.EdgeCodes[ was * 3 + 2 ] = TriangleEdgeCodes.Convex;
+			}
+			entry.Written.Clear();
 			foreach ( var inside in _welded[ shape ] )
 			{
 				entry.EdgeCodes[ inside * 3 ] = codes[ index * 3 ];
 				entry.EdgeCodes[ inside * 3 + 1 ] = codes[ index * 3 + 1 ];
 				entry.EdgeCodes[ inside * 3 + 2 ] = codes[ index * 3 + 2 ];
+				entry.Written.Add( inside );
 				index++;
 			}
 			_edgeCodes[ shape ] = entry.EdgeCodes;

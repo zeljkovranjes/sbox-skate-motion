@@ -79,6 +79,7 @@ internal sealed partial class MapCollisionSource
 		_ordered.Clear();
 		TriangleCount = 0;
 		UnsupportedShapeCount = 0;
+		var (centre, extent) = LookupBox( SkateUnits.Metres( window.Mins ), SkateUnits.Metres( window.Maxs ) );
 		foreach ( var body in world.Bodies )
 		{
 			if ( !body.IsValid() || !body.GetBounds().Overlaps( window ) ) continue;
@@ -92,6 +93,11 @@ internal sealed partial class MapCollisionSource
 				}
 				// Ordinary queries update only body transforms and enabled state.
 				var entry = _shapes.Get( shape, material );
+				// A level's world body reaches into every window but is made of a great many small shapes: only those that
+				// reach into it are kept, or every step walks, and every gathering welds, the whole level.
+				var instance = entry.Instance();
+				var (low, high) = LocalBox( centre, extent, instance );
+				if ( !MeshQueryMath.Overlaps( instance.Minimum, instance.Maximum, low, high ) ) continue;
 				_ordered.Add( entry );
 				TriangleCount += entry.Geometry.Triangles.Length;
 				if ( entry.Geometry.Triangles.Length == 0 ) UnsupportedShapeCount++;

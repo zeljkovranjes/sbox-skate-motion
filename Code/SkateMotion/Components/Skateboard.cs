@@ -13,6 +13,13 @@ public sealed class Skateboard : Component, IBoardDisplay
 	/// <summary>Handling profile; null uses the estimated Balanced settings.</summary>
 	[Property] public SkateProfile Profile { get; set; }
 
+	/// <summary>
+	/// Speed into the ground (metres a second) above which a landing bails, in place of the profile's; zero keeps the
+	/// profile's. A flat landing off a 3 m drop comes down at about 7.7 m/s, off 6 m about 10.8 and off 10 m about 14; a
+	/// landing tipped too far still bails at any speed.
+	/// </summary>
+	[Property, Range( 0f, 30f )] public float HardestLanding { get; set; }
+
 	/// <summary>Build an original deck, two trucks and four simulated wheels at startup.</summary>
 	[Property] public bool GenerateGeometry { get; set; } = true;
 
@@ -94,15 +101,21 @@ public sealed class Skateboard : Component, IBoardDisplay
 	/// </summary>
 	public bool DarkSideUp { get; set; }
 
-	/// <summary>Connection whose input the host accepts; empty accepts only input set on the host itself.</summary>
+	/// <summary>
+	/// Connection whose forwarded input the board accepts, chosen by the host; empty accepts only input set where the
+	/// board is simulated. The board is simulated by its network owner (the host when it has none): give a rider
+	/// ownership and its own client simulates the board it rides, with no round trip, and the host pays for no board but
+	/// its own.
+	/// </summary>
 	[Sync( SyncFlags.FromHost )] public Guid DriverId { get; set; }
 
-	[Sync( SyncFlags.FromHost )] private float NetSpeed { get; set; }
-	[Sync( SyncFlags.FromHost )] private int NetWheels { get; set; }
-	[Sync( SyncFlags.FromHost )] private bool NetAirborne { get; set; }
-	[Sync( SyncFlags.FromHost )] private bool NetBailed { get; set; }
-	[Sync( SyncFlags.FromHost )] private SkateBalanceMode NetBalance { get; set; }
-	[Sync( SyncFlags.FromHost )] private SkateGrind NetGrind { get; set; }
+	// The simulated state, written by whoever simulates the board.
+	[Sync] private float NetSpeed { get; set; }
+	[Sync] private int NetWheels { get; set; }
+	[Sync] private bool NetAirborne { get; set; }
+	[Sync] private bool NetBailed { get; set; }
+	[Sync] private SkateBalanceMode NetBalance { get; set; }
+	[Sync] private SkateGrind NetGrind { get; set; }
 
 	private const float RailSearchInches = 60f;
 	private const float CollisionEventSpeed = 1f;
@@ -111,6 +124,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 
 	private SkateInput _input;
 	private bool _forwardInput;
+	private bool _simulated;
 	internal Func<SkateInput> InputOverride { get; set; }
 	internal SkateInput CurrentInput => _input;
 	internal event Action<SkateInput> Stepped;
@@ -129,14 +143,28 @@ public sealed class Skateboard : Component, IBoardDisplay
 	private BoardVisuals _visuals;
 	private readonly StepSmoother _smooth = new();
 	private bool _riderAttached = true;
-	internal Vector3 ReleaseVelocity => _adapter?.ReleaseVelocity ?? Body.Velocity;
-	internal Vector3 ReleaseAngularVelocity => _adapter?.ReleaseAngularVelocity ?? Body.AngularVelocity;
-	internal Vector3 ReleasePosition => _adapter?.ReleasePosition ?? WorldPosition;
+	internal Vector3 ReleaseVelocity => IsProxy ? NetReleaseVelocity : _adapter?.ReleaseVelocity ?? Body.Velocity;
+	internal Vector3 ReleaseAngularVelocity => IsProxy ? NetReleaseSpin : _adapter?.ReleaseAngularVelocity ?? Body.AngularVelocity;
+	internal Vector3 ReleasePosition => IsProxy ? NetReleasePosition : _adapter?.ReleasePosition ?? WorldPosition;
+
+	// How the board was moving as the rider let go, for a rider driving it from another client to fall with: sent with
+	// the bail itself.
+	[Sync] private Vector3 NetReleaseVelocity { get; set; }
+	[Sync] private Vector3 NetReleaseSpin { get; set; }
+	[Sync] private Vector3 NetReleasePosition { get; set; }
+
+	private void ShareRelease()
+	{
+		NetReleaseVelocity = ReleaseVelocity;
+		NetReleaseSpin = ReleaseAngularVelocity;
+		NetReleasePosition = ReleasePosition;
+	}
 
 	/// <summary>Changes between loaded rider mass and a freely rolling unattended board.</summary>
 	public void SetRiderAttached( bool attached )
 	{
 		_riderAttached = attached;
+		Wake();
 		_input = default;
 		var before = WorldRotation;
 		_adapter?.SetRiderAttached( attached );
@@ -146,22 +174,22 @@ public sealed class Skateboard : Component, IBoardDisplay
 			_visuals?.Update( _adapter.Bodies, Simulating, RenderTransform, _solids, State.Grind != SkateGrind.None );
 	}
 
-	/// <summary>Sets held controls until the next call; on a networked client they are sent to the host.</summary>
+	/// <summary>Sets held controls until the next call; where the board is not simulated they are sent to its owner.</summary>
 	public void SetInput( SkateInput input )
 	{
 		_input = input;
 		_forwardInput = IsProxy;
 	}
 
-	/// <summary>Host only: lets one connection drive this board; null restores host-only input.</summary>
+	/// <summary>Host only: lets one connection drive this board; null accepts only input set where it is simulated.</summary>
 	public void SetDriver( Connection connection )
 	{
-		if ( IsProxy )
+		if ( Networking.IsActive && !Networking.IsHost )
 			return;
 		DriverId = connection?.Id ?? Guid.Empty;
 	}
 
-	[Rpc.Host( NetFlags.Unreliable )]
+	[Rpc.Owner( NetFlags.Unreliable )]
 	private void ReceiveInput( float steer, float push, float brake, float flickX, float flickY, float lean,
 		bool slide, bool goofy, bool pump, SkateAirGrab grab, bool gesture, SkatePushFeet pushFeet, bool newPush, bool hippyJump,
 		bool catching, SkatePushFeet feetOff, bool handPlant )
@@ -254,6 +282,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 			return;
 		_adapter?.Bail();
 		State = State with { IsBailed = true, Balance = SkateBalanceMode.None };
+		ShareRelease();
 		ReleaseDisplay();
 		Bailed?.Invoke();
 	}
@@ -272,6 +301,63 @@ public sealed class Skateboard : Component, IBoardDisplay
 		_input = default;
 		_adapter?.Reset();
 		State = default;
+		Wake();
+	}
+
+	/// <summary>
+	/// Whether the board is asleep: no one rides it and it has lain still, so its step is skipped until it is ridden,
+	/// moved, set going or reset. Most boards in a busy game are lying about; asleep they cost nothing.
+	/// </summary>
+	public bool Asleep { get; private set; }
+
+	// A board no one rides counts as still when it is within SleepDrift inches and SleepTurn degrees of where it was
+	// SleepAfter seconds before; moved more than that while asleep (picked up, knocked, placed), it wakes from there.
+	private const float SleepAfter = 1f;
+	private const float SleepDrift = 0.5f;
+	private const float SleepTurn = 1f;
+	private Transform? _stillFrom;
+	private float _stillFor;
+
+	private void Wake()
+	{
+		Asleep = false;
+		_stillFrom = null;
+		_stillFor = 0f;
+	}
+
+	// Whether this step is skipped: asleep, or falling asleep now.
+	private bool Sleeping()
+	{
+		if ( _riderAttached )
+		{
+			if ( Asleep ) Wake();
+			_stillFrom = null;
+			return false;
+		}
+		var moved = _stillFrom is { } from && (WorldPosition.Distance( from.Position ) > SleepDrift
+			|| Rotation.Difference( WorldRotation, from.Rotation ).Angle() > SleepTurn);
+		if ( Asleep )
+		{
+			if ( !moved )
+				return true;
+			// Moved from outside while asleep: the simulation goes on from where and how it was left.
+			Wake();
+			_adapter.Reset();
+			return false;
+		}
+		if ( _stillFrom is null || moved )
+		{
+			_stillFrom = WorldTransform;
+			_stillFor = 0f;
+			return false;
+		}
+		_stillFor += Time.Delta;
+		if ( _stillFor < SleepAfter )
+			return false;
+		Asleep = true;
+		Body.Velocity = Vector3.Zero;
+		Body.AngularVelocity = Vector3.Zero;
+		return true;
 	}
 
 	protected override void OnStart() => Build();
@@ -279,6 +365,8 @@ public sealed class Skateboard : Component, IBoardDisplay
 	private void Build()
 	{
 		var settings = SkateProfiles.Read( Profile );
+		if ( HardestLanding > 0f )
+			settings = settings with { BailSpeed = HardestLanding };
 		var radius = Profile?.WheelRadius ?? 0.0285f;
 		string problem = null;
 		var parts = BoardModel is null ? null : BoardModelParts.Of( BoardModel, out problem );
@@ -492,10 +580,19 @@ public sealed class Skateboard : Component, IBoardDisplay
 	{
 		if ( IsProxy )
 		{
+			_simulated = false;
 			UpdateProxy();
 			return;
 		}
 		if ( _adapter is null || !Body.IsValid() || !Body.PhysicsBody.IsValid() )
+			return;
+		// Taken over (this peer became its owner): the simulation goes on from where the board was last seen.
+		if ( !_simulated )
+		{
+			_simulated = true;
+			_adapter.Reset();
+		}
+		if ( Sleeping() )
 			return;
 		if ( InputOverride is not null )
 			_input = InputOverride();
@@ -548,6 +645,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 			Landed?.Invoke( result.ImpactSpeed );
 		if ( State.IsBailed && !wasBailed )
 		{
+			ShareRelease();
 			ReleaseDisplay();
 			Bailed?.Invoke();
 		}
