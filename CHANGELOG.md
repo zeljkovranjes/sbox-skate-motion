@@ -1,6 +1,16 @@
 # Changelog
 
 ## 2026-10-21
+Title: A Shake Before the Call, and Powerslides That Stop
+### Added
+# Controls
+Shaking before it flies - SkateRider.RecallShake (seconds, 0 by default) has a board called from more than 200 in away tremble where it lies first, growing stronger and rising up to 5 in off the ground (jittering up to 1.5 in and 14 degrees), then fly from there
+Board called - SkateRider.BoardCalled( shake, flight ) is raised where the rider is simulated as its board is called to the hand, with the seconds it shakes and then flies, so a game can time a sound or an effect to it
+### Fixed
+# Physics
+Powerslides gliding sideways - while powersliding the wheels keep only a share of their grip (so the board can swing across its travel), and nothing else slowed it: a held slide from a fast push glided sideways for over four seconds (1.7 m/s^2, on grass as on concrete). Turned across its travel the board now scrubs as sliding urethane does, up to 3 m/s^2 more as far as it is across: the same slide stops in 1.9 s (4.2 m/s^2)
+
+## 2026-10-21
 Title: Calling the Board Home
 ### Added
 # Controls

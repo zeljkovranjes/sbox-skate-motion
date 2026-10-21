@@ -29,6 +29,12 @@ internal sealed partial class RiderInteraction
 	internal bool Active => Action != RiderAction.None;
 	internal float Progress => Math.Clamp( _elapsed / _duration, 0f, 1f );
 	internal bool CaptureBoard { get; private set; }
+
+	/// <summary>Seconds a board called from afar shakes where it lies before it flies to the hand.</summary>
+	internal float Shake { get; set; }
+
+	/// <summary>Raised as the board is called to the hand: the seconds it shakes first, then the seconds it flies.</summary>
+	internal event System.Action<float, float> Called;
 	internal bool Finished => Active && Action switch
 	{
 		RiderAction.PickUp => UsesSourcePickup ? _captured && _pickup.Complete : _captured && _flightDone,

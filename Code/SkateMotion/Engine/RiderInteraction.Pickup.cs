@@ -14,10 +14,19 @@ internal sealed partial class RiderInteraction
 	internal bool UsesSourcePickup => Action == RiderAction.PickUp && _pickup is not null;
 
 	// The board's own flight to the hand, without a retrieval profile: its start, time so far and length, and whether it
-	// has arrived.
+	// has arrived. Called from afar it first shakes where it lies for _shakeLength seconds (the flight's time runs from
+	// minus that), then takes off from a little above where it lay.
 	private float _flightTime;
 	private float _flightLength;
 	private bool _flightDone;
+	private float _shakeLength;
+	private bool _shakenLoose;
+
+	// The shake: how far (inches) and how far round (degrees) it trembles at its strongest, a quarter of that as it begins,
+	// and how high (inches) it rises off the ground by the end.
+	private const float ShakeReach = 1.5f;
+	private const float ShakeTurn = 14f;
+	private const float ShakeLift = 5f;
 
 	// Without a reach animation to say when the hand is out, the board is called this many seconds into the pickup; with
 	// one that never calls it (cut short), after ReachCallAtLatest.
@@ -74,22 +83,48 @@ internal sealed partial class RiderInteraction
 			if ( !_pickupRequested && _elapsed < (_reaching && !far ? ReachCallAtLatest : CallAtLatest) )
 				return;
 			_startBoard = _board.WorldTransform;
-			_flightTime = 0f;
+			_shakeLength = far ? MathF.Max( Shake, 0f ) : 0f;
+			_shakenLoose = _shakeLength <= 0f;
+			_flightTime = -_shakeLength;
 			_flightLength = BoardReach.RecallSeconds( SkateUnits.Metres( _motor.CarryPose.Position - _startBoard.Position ).Length() );
 			_captured = true;
 			CaptureBoard = true;
+			Called?.Invoke( _shakeLength, _flightLength );
 			return;
 		}
 		_flightTime += delta;
+		// Shaken loose, it flies from where the shake lifted it.
+		if ( !_shakenLoose && _flightTime >= 0f )
+		{
+			_shakenLoose = true;
+			_startBoard = _startBoard.WithPosition( _startBoard.Position + Vector3.Up * ShakeLift );
+		}
 		_flightDone = _flightTime >= _flightLength;
 		_board.WorldTransform = Flight( _motor.CarryPose );
 	}
 
 	private Transform Flight( Transform hand )
 	{
+		if ( _flightTime < 0f && _shakeLength > 0f )
+			return Shaken( _startBoard, 1f + _flightTime / _shakeLength, Time.Now );
 		var progress = _flightLength > 0f ? _flightTime / _flightLength : 1f;
 		var position = SkateUnits.Inches( BoardReach.Along( SkateUnits.Metres( _startBoard.Position ), SkateUnits.Metres( hand.Position ), progress ) );
 		return new Transform( position, Rotation.Slerp( _startBoard.Rotation, hand.Rotation, Ease( progress ) ), _startBoard.Scale );
+	}
+
+	// The board trembling where it lies before it flies, as if tugged at: the tremor grows with the square of how far
+	// through the shake it is (a quarter of its strength as it begins) and lifts it off the ground; its place and turn
+	// jitter at three unrelated rates (about 23, 38 and 61 a second), smooth in time so every frame shows it.
+	private static Transform Shaken( Transform rest, float share, float now )
+	{
+		var grow = Math.Clamp( share, 0f, 1f );
+		grow *= grow;
+		float Wobble( float phase ) => MathF.Sin( now * 145f + phase ) * 0.5f + MathF.Sin( now * 237f + phase * 1.7f ) * 0.3f
+			+ MathF.Sin( now * 385f + phase * 2.3f ) * 0.2f;
+		var strength = 0.25f + 0.75f * grow;
+		var shift = new Vector3( Wobble( 0f ), Wobble( 2.1f ), Wobble( 4.2f ) ) * (ShakeReach * strength) + Vector3.Up * (ShakeLift * grow);
+		var turn = new Angles( Wobble( 1.3f ), Wobble( 3.4f ) * 0.5f, Wobble( 5.5f ) ) * (ShakeTurn * strength);
+		return new Transform( rest.Position + shift, rest.Rotation * turn.ToRotation(), rest.Scale );
 	}
 
 	/// <summary>

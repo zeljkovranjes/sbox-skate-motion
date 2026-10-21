@@ -39,6 +39,9 @@ internal sealed class BoardPilot
 
 	private readonly AirControl _air = new();
 	private readonly PowerSlide _slide = new();
+
+	// How much more (m/s^2) the wheels slow the board when it slides fully across its travel.
+	private const float SlideScrub = 3f;
 	private readonly KickTurn _kickTurn = new();
 	private readonly HandPlant _plant = new();
 	private readonly GrindHold _grindHold = new();
@@ -426,6 +429,21 @@ internal sealed class BoardPilot
 					var slideTurn = _slide.Step( body, normal, input.Steer, input.Slide, true, step );
 					if ( slideTurn != Vector3.Zero )
 						assembly.AddImpulse( 0, Vector3.Zero, body.AngularImpulse( slideTurn ) );
+					// Turned across its travel, its wheels scrub along the ground as sliding urethane does. On the slide's
+					// low grip alone (which lets it swing across) it glided on sideways, slowing 1.7 m/s^2: a held slide from
+					// a fast push lasted over four seconds. It now slows up to SlideScrub more, as far as it is turned across.
+					if ( _slide.Sliding && !_slide.Reverting )
+					{
+						var travel = body.Velocity - normal * Vector3.Dot( body.Velocity, normal );
+						var travelling = travel.Length();
+						if ( travelling > 0.01f )
+						{
+							var way = travel / travelling;
+							var across = Vector3.Cross( normal, way );
+							var share = MathF.Abs( Vector3.Dot( body.Forward, across ) );
+							force -= way * (mass * Math.Min( SlideScrub * share, travelling / step ));
+						}
+					}
 				}
 				// A kick turn: slow with the steering pushed over, the board pivots round on its back wheels.
 				var rollingSpeed = count > 0 ? speedSum / count : 0f;

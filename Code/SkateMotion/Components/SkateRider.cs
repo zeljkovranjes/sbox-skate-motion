@@ -51,6 +51,15 @@ public sealed class SkateRider : Component
 	/// </summary>
 	[Property, Group( "Controls" )] public bool RecallNeedsSight { get; set; } = true;
 
+	/// <summary>Seconds a board called from afar shakes where it lies before it flies to the hand; 0 for none.</summary>
+	[Property, Group( "Controls" )] public float RecallShake { get; set; }
+
+	/// <summary>
+	/// Raised where the rider is simulated as its board is called to the hand: the seconds it shakes where it lies first
+	/// (see <see cref="RecallShake"/>), then the seconds it flies. A game can time a sound or an effect from it.
+	/// </summary>
+	public event System.Action<float, float> BoardCalled;
+
 	/// <summary>Whether a bailed rider gets up by themselves once they have lain still for a while.</summary>
 	[Property, Group( "Riding" )] public bool RecoverAutomatically { get; set; } = true;
 
@@ -367,6 +376,8 @@ public sealed class SkateRider : Component
 		_motor.Responsive = ResponsiveWalking;
 		_motor.RecallRange = RecallRange;
 		_motor.RecallNeedsSight = RecallNeedsSight;
+		if ( _interaction is not null )
+			_interaction.Shake = RecallShake;
 	}
 
 	// How hard the rider is told to walk, as its clips see it. Walking responsively, the stick let go for under MoveGrace
@@ -655,6 +666,7 @@ public sealed class SkateRider : Component
 		if ( boardControls.IsValid() ) boardControls.Enabled = false;
 		_animator.UseClips( Scene.GetSystem<RiderAnimationLibrary>().Get( AnimationClips, AnimationGraph ) );
 		_interaction = new( GameObject, Board.GameObject, Board.Body, _motor, _animator.RetrievalProfile );
+		_interaction.Called += ( shake, flight ) => BoardCalled?.Invoke( shake, flight );
 		_motor.FollowBoard();
 		Subscribe();
 		// The host simulates the board; the rider's owner drives it with forwarded input.
