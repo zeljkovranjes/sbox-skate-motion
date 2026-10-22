@@ -22,6 +22,22 @@ internal sealed class BoardPilot
 
 	// Wind-up (seconds) a foot plant pops as hard as: a plant is a quick hop, not a full ollie.
 	private const float PlantHold = 0.12f;
+
+	// A foot-plant trick (a plant, or an ollie popped as a push stroke starts: a no comply) is reported as it is asked for,
+	// but its pop is held while the rider's animation plants the foot (ControlInput.FootPlanting) and lets go as the rider
+	// springs off it: popped at once, the board was in the air before the foot was down and the foot plant never played.
+	// The held trick, how long it has waited, the wind-up it pops with, and whether the rider was seen planting.
+	private TrickKind _heldPop;
+	private float _heldFor;
+	private float _heldWindup;
+	private float _heldCharge;
+	private bool _plantSeen;
+	private float _sincePushStart = float.PositiveInfinity;
+
+	// Seconds a held pop waits for the rider to start planting before it pops anyway (a rider with no foot-plant
+	// animation), and the longest it waits in all.
+	private const float PlantSignalWait = 0.08f;
+	private const float PlantLongest = 0.9f;
 	private bool _bailed;
 	private bool _attached = true;
 
@@ -556,16 +572,36 @@ internal sealed class BoardPilot
 		// planted foot springing the rider off the ground (a boneless or fastplant).
 		var pushStart = input.Push > 0f && !_pushHeld;
 		_pushHeld = input.Push > 0f;
+		_sincePushStart = pushStart ? 0f : _sincePushStart + step;
 		if ( trick == TrickKind.None && _attached && !_bailed && rolling && !grind.Active && input.Grab && pushStart )
 			trick = TrickKind.Plant;
-		if ( trick != TrickKind.None )
+		// The trick that pops this step: a foot-plant trick is held until the foot is planted (see _heldPop).
+		var pop = trick;
+		if ( _heldPop != TrickKind.None )
 		{
+			trick = TrickKind.None;
+			pop = HeldPopReady( input, supported, step ) ? _heldPop : TrickKind.None;
+		}
+		else if ( trick != TrickKind.None && supported && !grind.Active && FootPlantTrick( trick ) )
+		{
+			_heldPop = trick;
+			_heldFor = 0f;
+			_plantSeen = false;
+			_heldWindup = trick == TrickKind.Plant ? PlantHold : _tricks.LastHeld;
+			_heldCharge = trick == TrickKind.Plant ? 0.5f : _tricks.LastCharge;
+			pop = TrickKind.None;
+		}
+		if ( pop != TrickKind.None )
+		{
+			var held = _heldPop == pop;
+			_heldPop = TrickKind.None;
 			// A pop ends a landing's absorb at once.
 			_sinceLanding = LandingAbsorb;
 			if ( _settings.Recovered )
 			{
 				var slope = MathF.Acos( Math.Clamp( normal.Z, -1f, 1f ) ) * 180f / MathF.PI;
-				var launch = HandlingCurves.PopSpeed( HandlingCurves.PopStrength( trick == TrickKind.Plant ? PlantHold : _tricks.LastHeld ), slope,
+				var launch = HandlingCurves.PopSpeed( HandlingCurves.PopStrength( held ? _heldWindup
+						: pop == TrickKind.Plant ? PlantHold : _tricks.LastHeld ), slope,
 					Vector3.Dot( body.Velocity, body.Forward ), _settings.Difficulty );
 				// The pop sets the speed off the ground (whatever the board was already doing along the normal, such as
 				// rising off a bump, is replaced); steering at the pop carries the board a little sideways.
@@ -573,11 +609,12 @@ internal sealed class BoardPilot
 				impulse = (normal * (launch - off) - body.Left * (PopSteer * launch * input.Steer)) * mass;
 			}
 			else
-				impulse = normal * (mass * _settings.PopSpeed * (0.55f + 0.45f * (trick == TrickKind.Plant ? 0.5f : _tricks.LastCharge)));
+				impulse = normal * (mass * _settings.PopSpeed * (0.55f + 0.45f * (held ? _heldCharge
+					: pop == TrickKind.Plant ? 0.5f : _tricks.LastCharge)));
 			if ( !AnimatedTricks )
 			{
-				var spin = normal * (_settings.SpinRate * TrickMotion.Spin( trick ) * _tricks.SpinDirection);
-				spin += body.Forward * (_settings.FlipRate * TrickMotion.Flip( trick ) * (input.Goofy ? -1f : 1f));
+				var spin = normal * (_settings.SpinRate * TrickMotion.Spin( pop ) * _tricks.SpinDirection);
+				spin += body.Forward * (_settings.FlipRate * TrickMotion.Flip( pop ) * (input.Goofy ? -1f : 1f));
 				angularImpulse = body.AngularImpulse( spin );
 			}
 			assembly.AddImpulse( 0, impulse, angularImpulse );
@@ -634,6 +671,26 @@ internal sealed class BoardPilot
 		return surface.Velocity + Vector3.Cross( surface.AngularVelocity, contact.PointB - surface.Position );
 	}
 
+	// A plant, or an ollie popped within a no comply's window of a push stroke starting: tricks the rider plants a foot for.
+	private bool FootPlantTrick( TrickKind trick ) => trick == TrickKind.Plant
+		|| trick is TrickKind.Ollie or TrickKind.Nollie && _sincePushStart < Animation.RiderTrickFacts.NoComplyWindow;
+
+	// Whether a held foot-plant trick pops this step: once the rider, seen planting the foot, springs off it; or, with no
+	// planting seen, after a moment; or at the longest. Off the ground (rolled off an edge) or off the board it is let go
+	// unpopped.
+	private bool HeldPopReady( in ControlInput input, bool supported, float step )
+	{
+		_heldFor += step;
+		if ( !supported || !Ridden )
+		{
+			_heldPop = TrickKind.None;
+			return false;
+		}
+		_plantSeen |= input.FootPlanting;
+		var sprung = _plantSeen ? !input.FootPlanting : _heldFor >= PlantSignalWait;
+		return sprung || _heldFor >= PlantLongest;
+	}
+
 	internal void SetRiderAttached( bool attached )
 	{
 		var keepBail = _bailed && !attached;
@@ -666,5 +723,7 @@ internal sealed class BoardPilot
 		_wall.Reset();
 		_grindHold.Reset();
 		_previousNormal = Vector3.Zero;
+		_heldPop = TrickKind.None;
+		_sincePushStart = float.PositiveInfinity;
 	}
 }

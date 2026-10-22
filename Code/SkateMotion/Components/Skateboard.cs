@@ -124,6 +124,13 @@ public sealed class Skateboard : Component, IBoardDisplay
 	public bool DarkSideUp { get; set; }
 
 	/// <summary>
+	/// Whether the rider's animation is planting a foot for a foot-plant trick (a boneless, a fastplant, a no comply) and
+	/// has not yet sprung off it, set each frame by an animated rider: the trick's pop waits for it, so the board leaves
+	/// the ground as the rider springs off the planted foot. Without it the pop comes a moment after the trick is asked for.
+	/// </summary>
+	public bool FootPlanting { get; set; }
+
+	/// <summary>
 	/// Connection whose forwarded input the board accepts, chosen by the host; empty accepts only input set where the
 	/// board is simulated. The board is simulated by its network owner (the host when it has none): give a rider
 	/// ownership and its own client simulates the board it rides, with no round trip, and the host pays for no board but
@@ -626,6 +633,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 		_adapter.AnimatedTricks = Time.Now - _displayedAt < AnimationTimeout;
 		_adapter.PushContact = PushContact;
 		_adapter.DarkSideUp = DarkSideUp;
+		_adapter.FootPlanting = FootPlanting;
 		var result = _adapter.Step( _riderAttached ? _input : default, Time.Delta, _rails.AsSpan( 0, railCount ) );
 		StepMilliseconds = (float)System.Diagnostics.Stopwatch.GetElapsedTime( started ).TotalMilliseconds;
 		State = new( _adapter.Speed,

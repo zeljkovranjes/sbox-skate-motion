@@ -61,6 +61,13 @@ internal sealed class RiderTrickFacts
 		var onRail = !string.IsNullOrEmpty( input.Grind );
 		Grabs( intents, known, input, hand, newCatch );
 		GroundGrabs( intents, known, input, hand, onRail, delta );
+		// A no comply goes from the push stroke straight into its foot plant: as it pops, the graph is told the push's own
+		// gesture, its way from a push's start into the no comply's foot plant (which has no lead-in clip of its own).
+		if ( NoComply( input ) && input.TimeSincePop < PopMoment )
+		{
+			known[ "has-gesture-intent" ] = 1f;
+			facts.SetArgument( "has-gesture-intent", "group", "square" );
+		}
 		Continuations( intents, known, input, newCatch );
 		// Brake held in a manual drags its tail (or nose).
 		if ( input.Balance != 0 && input.Brake > 0.2f )
@@ -84,7 +91,7 @@ internal sealed class RiderTrickFacts
 			FootPlant( intents, front != mirrored );
 			return true;
 		}
-		if ( input.Trick is "ollie" or "nollie" && _sincePushStart < NoComplyWindow && !input.Airborne )
+		if ( NoComply( input ) )
 		{
 			intents[ "no-comply" ] = 1f;
 			FootPlant( intents, mirrored );
@@ -92,6 +99,10 @@ internal sealed class RiderTrickFacts
 		}
 		return false;
 	}
+
+	// An ollie popped as a push stroke starts, still on the ground: a no comply.
+	private bool NoComply( in RiderAnimationInput input ) =>
+		input.Trick is "ollie" or "nollie" && _sincePushStart < NoComplyWindow && !input.Airborne;
 
 	/// <summary>
 	/// A board adjust without a grab: the trick stick held in the air tilts the board toward the rider's toes or heels

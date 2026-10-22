@@ -725,6 +725,7 @@ public sealed class SkateRider : Component
 		CheckHeadFirst();
 		Board.PushContact = Mode == SkateRiderMode.Riding ? _animator.PushContact : null;
 		Board.DarkSideUp = Mode == SkateRiderMode.Riding && _animator.DarkSideUp;
+		Board.FootPlanting = Mode == SkateRiderMode.Riding && PlantingFoot( AnimationState );
 		_interaction.ObserveRetrievalRequest( _animator.RetrieveRequested, _animator.HandlingMotion is not null );
 		// A landing played inside an interaction (getting off in the air) carries the walker as its clip carries the body.
 		_interaction.LandingTravel = _animator.LandingTravel;
@@ -778,6 +779,11 @@ public sealed class SkateRider : Component
 		else if ( Mode != SkateRiderMode.Bailed )
 			SetWalkInput( WalkingInput( pad, move ), keys.Jump || _controller?.Jump == true, keys.Sprint || _controller?.Sprint == true );
 	}
+
+	// The rider is planting a foot for a foot-plant trick and has not yet sprung off it: the graph's push tricks (bonelesses,
+	// fastplants, no complies) plant, then lift, then leave the ground.
+	private static bool PlantingFoot( string state ) =>
+		state is not null && state.Contains( ".PushTrick." ) && !state.Contains( ".LeftGround" );
 
 	// Board input from the keys and the controller (through its profile when there is one), merged. A trick plays to its
 	// end before the next can start: on the ground, from a trick's pop to the end of its landing, the trick stick is let

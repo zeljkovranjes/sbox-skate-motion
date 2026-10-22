@@ -113,6 +113,9 @@ internal sealed class SkateBody
 	/// <summary>The rider's animation holds the board dark side up (the skateboard's DarkSideUp).</summary>
 	internal bool DarkSideUp { get; set; }
 
+	/// <summary>The rider's animation is planting a foot for a foot-plant trick (the skateboard's FootPlanting).</summary>
+	internal bool FootPlanting { get; set; }
+
 	/// <summary>True while an animation shows the board's tricks; see <see cref="BoardPilot.AnimatedTricks"/>.</summary>
 	internal bool AnimatedTricks
 	{
@@ -129,7 +132,7 @@ internal sealed class SkateBody
 			throw new ArgumentOutOfRangeException( nameof( step ) );
 		var controls = new ControlInput( input.Steer, input.Push, input.Brake,
 			input.FlickX, input.FlickY, input.Lean, input.Slide, Grab: input.Grab != SkateAirGrab.None, Goofy: input.Goofy, Pump: input.Pump,
-			PushContact: PushContact ) { HandPlant = input.HandPlant, DarkSideUp = DarkSideUp }.Sanitized();
+			PushContact: PushContact ) { HandPlant = input.HandPlant, DarkSideUp = DarkSideUp, FootPlanting = FootPlanting }.Sanitized();
 		var steps = Math.Max( 1, (int)MathF.Ceiling( step * 240f ) );
 		var delta = step / steps;
 		var result = default( PhysicsStep );
