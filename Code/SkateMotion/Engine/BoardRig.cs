@@ -37,6 +37,12 @@ internal sealed class BoardRig
 	/// </summary>
 	internal float LeanLimit { get; }
 
+	/// <summary>Whether each truck is bolted up against the deck and leans with it (BoardLayout.BoltedTrucks).</summary>
+	internal bool[] BoltedTrucks { get; }
+
+	/// <summary>How far (inches) the wheels can come up toward the level deck before they meet it (BoardLayout.WheelRoom).</summary>
+	internal float WheelRoom { get; }
+
 	internal BoardRig( GameObject board, SkateSettings settings, float radius, GameObject[] wheels = null, BoardModelParts parts = null,
 		int[] partBones = null )
 	{
@@ -52,6 +58,8 @@ internal sealed class BoardRig
 		Settings = parts is null ? settings : Measured( board, settings, radius, parts );
 		WheelRadius = parts?.Layout.WheelRadius ?? radius;
 		LeanLimit = parts?.Layout.LeanLimit ?? float.PositiveInfinity;
+		BoltedTrucks = parts?.Layout.BoltedTrucks ?? new bool[ 2 ];
+		WheelRoom = (parts?.Layout.WheelRoom ?? float.PositiveInfinity) * SkateUnits.InchesPerMetre;
 		// The trucks' pivots sit about where the hanger meets the baseplate, three fifths of the way up from the axle to
 		// the deck's underside (the generated deck's is 7 mm below its middle).
 		var axle = Settings.RideHeight - WheelRadius;

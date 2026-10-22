@@ -21,7 +21,7 @@ internal sealed class BoardModelParts
 	// What the cached readings were found by. A code reload keeps static state, so models read by an earlier detector
 	// kept its layout (one without the hanger and wheel gap measured): raise Detection whenever the detector changes
 	// what it measures, and the cache is read again.
-	private const int Detection = 10;
+	private const int Detection = 11;
 	private static int _cachedDetection;
 
 	// A board shorter or longer than this (metres) was authored in other units: it is shown at a usual deck's length.
@@ -171,8 +171,9 @@ internal sealed class BoardModelParts
 			+ $"track {layout.Track:F3} m, wheel radius {layout.WheelRadius:F4} m, ride height {layout.RideHeight:F3} m, "
 			+ $"deck {layout.Length:F3} x {layout.Width:F3} m; {levels.Count} level{(levels.Count == 1 ? "" : "s")} of detail ("
 			+ string.Join( ", ", levels.Select( level => $"{level.Triangles.Length / 3} triangles" ) ) + ")."
+			+ (layout.BoltedTrucks[ 0 ] || layout.BoltedTrucks[ 1 ] ? " Its trucks are bolted up against the deck and lean with it." : "")
 			+ (layout.LeanLimit < Core.Vehicle.DeckLean.MaximumRoll
-				? $" Its deck leans {layout.LeanLimit * (180f / MathF.PI):F1} degrees at most: its trucks and wheels leave it no more room."
+				? $" Its deck leans {layout.LeanLimit * (180f / MathF.PI):F1} degrees at most: its wheels leave it no more room."
 				: "" ) );
 		return parts;
 	}

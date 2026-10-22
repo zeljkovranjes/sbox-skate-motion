@@ -25,10 +25,10 @@ internal sealed class SyntheticBoard
 	private readonly List<int> _triangles = new();
 	private readonly Dictionary<string, List<int>> _pieces = new();
 
-	private SyntheticBoard( bool welded, bool wheelsOnTrucks, bool rigid = false )
+	private SyntheticBoard( bool welded, bool wheelsOnTrucks, bool rigid = false, float deckDrop = 0f )
 	{
-		var deckBottom = RideHeight - DeckThickness * 0.5f;
-		Box( "deck", new Vector3( 0f, 0f, RideHeight ), new Vector3( DeckLength, DeckWidth, DeckThickness ) );
+		var deckBottom = RideHeight - deckDrop - DeckThickness * 0.5f;
+		Box( "deck", new Vector3( 0f, 0f, RideHeight - deckDrop ), new Vector3( DeckLength, DeckWidth, DeckThickness ) );
 		for ( var truck = 0; truck < 2; truck++ )
 		{
 			var x = (truck == 0 ? 0.5f : -0.5f) * Wheelbase;
@@ -58,8 +58,9 @@ internal sealed class SyntheticBoard
 	/// (a model with a mesh for the deck and one for each truck with its wheels).</summary>
 	internal static SyntheticBoard Build( bool welded = false, bool wheelsOnTrucks = false ) => new( welded, wheelsOnTrucks );
 
-	/// <summary>The board with each truck a rigid block from its axle up against the deck (a hinge), its own pieces.</summary>
-	internal static SyntheticBoard BuildRigid() => new( false, false, true );
+	/// <summary>The board with each truck a rigid block from its axle up against the deck (a hinge), its own pieces, the
+	/// deck <paramref name="deckDrop"/> metres lower than the usual board's (closer over the wheels).</summary>
+	internal static SyntheticBoard BuildRigid( float deckDrop = 0f ) => new( false, false, true, deckDrop );
 
 	/// <summary>The board as a mesh, turned into another frame (the board's own frame turned by <paramref name="turn"/>)
 	/// and scaled.</summary>

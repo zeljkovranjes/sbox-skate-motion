@@ -38,10 +38,23 @@ internal sealed class BoardLayout
 	internal float PivotHeight { get; init; }
 
 	/// <summary>
-	/// The furthest the deck can lean on its trucks (radians) before it comes down through its own hangers or wheels, which
-	/// stay level with the ground as it leans; infinity when nothing of theirs lies under the deck.
+	/// The furthest the deck can lean on its trucks (radians) before it comes down through its own wheels or hangers, which
+	/// stay level with the ground as it leans (a truck bolted to it leans with it); infinity when nothing of theirs lies
+	/// under the deck.
 	/// </summary>
 	internal float LeanLimit { get; init; } = float.PositiveInfinity;
+
+	/// <summary>
+	/// Whether each truck, front then rear, is bolted up against the deck (a hinge, a hanger welded to its baseplate): it
+	/// leans with the deck instead of staying level with the ground, and its wheels tilt with it.
+	/// </summary>
+	internal bool[] BoltedTrucks { get; init; } = new bool[ 2 ];
+
+	/// <summary>
+	/// How far (metres) the wheels can come up toward the deck, at the least, before they meet it with the deck level;
+	/// infinity when no wheel lies under the deck.
+	/// </summary>
+	internal float WheelRoom { get; init; } = float.PositiveInfinity;
 
 	/// <summary>The deck's length, nose to tail.</summary>
 	internal float Length { get; init; }

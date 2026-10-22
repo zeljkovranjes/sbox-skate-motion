@@ -42,6 +42,9 @@ internal sealed class BoardPartDetector
 
 	// Cells across the deck's width of the grid its underside is measured on, for how far it can lean.
 	private const int UndersideCells = 50;
+
+	// Points of a truck touching the deck or a baseplate that make it bolted to them.
+	private const int BoltedPoints = 3;
 	private static readonly float[] Sides = { -1f, 1f };
 
 	private readonly BoardMesh _mesh;
@@ -494,6 +497,7 @@ internal sealed class BoardPartDetector
 		foreach ( var wheel in _wheels )
 			width += wheel.Width * 0.25f;
 		var gap = MathF.Min( _wheels[ 0 ].MinY - _wheels[ 1 ].MaxY, _wheels[ 2 ].MinY - _wheels[ 3 ].MaxY );
+		var clearance = Clearance( parts );
 		return new BoardLayout
 		{
 			Rotation = _rotation,
@@ -504,7 +508,9 @@ internal sealed class BoardPartDetector
 			WheelRadius = Radius,
 			WheelWidth = width,
 			PivotHeight = pivot,
-			LeanLimit = LeanLimit( parts ),
+			LeanLimit = clearance.Limit,
+			BoltedTrucks = clearance.Bolted,
+			WheelRoom = clearance.WheelRoom,
 			InnerWheelGap = gap,
 			HangerRadius = HangerRadius( parts, gap ),
 			Length = _max.X - _min.X,
@@ -517,17 +523,19 @@ internal sealed class BoardPartDetector
 		};
 	}
 
-	// How far (radians) the deck can lean on its trucks before its underside and the baseplates on it come down through a
-	// hanger or a wheel, which stay level with the ground as it leans. A deck dipping by a small angle drops by about that
-	// angle times how far a point lies from its long middle, so each hanger or wheel point under the deck allows its gap
-	// (and a little more, hidden in the deck: HiddenShare) over that distance. The deck's underside is measured on a grid,
-	// at each cell's middle, every surface over it kept; a point is held to the nearest above it (or just into it, as far
-	// as is hidden).
-	private float LeanLimit( BoardPart[] parts )
+	// How the deck can lean on its trucks. A truck reaching up against the deck or a baseplate (within what is hidden in
+	// them: HiddenShare) is bolted to it and leans with it. The rest (wheels, hangers clear of the deck) stays level with
+	// the ground, and the deck leans until its underside, with the baseplates and bolted trucks on it, comes down through
+	// them: a deck dipping by a small angle drops by about that angle times how far a point lies from its long middle, so
+	// each point under the deck allows its gap (and what is hidden) over that distance. The wheels' room is their smallest
+	// such gap, deck level. The deck's underside is measured on a grid, at each cell's middle, every surface over it kept;
+	// a point is held to the nearest above it (or just into it, as far as is hidden).
+	private (float Limit, bool[] Bolted, float WheelRoom) Clearance( BoardPart[] parts )
 	{
+		var bolted = new bool[ 2 ];
 		var cell = _width / UndersideCells;
 		if ( !(cell > 0f) )
-			return float.PositiveInfinity;
+			return (float.PositiveInfinity, bolted, float.PositiveInfinity);
 		var columns = (int)((_max.X - _min.X) / cell) + 1;
 		var rows = (int)((_max.Y - _min.Y) / cell) + 1;
 		var over = new List<float>[ columns * rows ];
@@ -553,30 +561,56 @@ internal sealed class BoardPartDetector
 			}
 		}
 		var hidden = Thickness * HiddenShare;
-		var limit = float.PositiveInfinity;
+		// The room over a point: its gap to the nearest surface above it, and what is hidden; null with nothing above it.
+		float? Room( Vector3 point )
+		{
+			var x = (int)((point.X - _min.X) / cell);
+			var y = (int)((point.Y - _min.Y) / cell);
+			if ( x < 0 || x >= columns || y < 0 || y >= rows || over[ x * rows + y ] is not { } heights )
+				return null;
+			var nearest = float.PositiveInfinity;
+			foreach ( var height in heights )
+			{
+				if ( height >= point.Z - hidden && height < nearest )
+					nearest = height;
+			}
+			return float.IsFinite( nearest ) ? MathF.Max( 0f, nearest - point.Z + hidden ) : null;
+		}
+		// A truck touching what is over it (no more room than is hidden) at a few points is bolted to it.
+		var touching = new int[ 2 ];
 		for ( var t = 0; t < parts.Length; t++ )
 		{
-			if ( Leans( parts[ t ] ) )
+			if ( parts[ t ] is not (BoardPart.FrontTruck or BoardPart.RearTruck) )
 				continue;
 			for ( var corner = 0; corner < 3; corner++ )
 			{
-				var point = _points[ _triangles[ t * 3 + corner ] ];
-				var away = MathF.Abs( point.Y - _centreY );
-				var x = (int)((point.X - _min.X) / cell);
-				var y = (int)((point.Y - _min.Y) / cell);
-				if ( away < cell || x < 0 || x >= columns || y < 0 || y >= rows || over[ x * rows + y ] is not { } heights )
-					continue;
-				var nearest = float.PositiveInfinity;
-				foreach ( var height in heights )
-				{
-					if ( height >= point.Z - hidden && height < nearest )
-						nearest = height;
-				}
-				if ( float.IsFinite( nearest ) )
-					limit = MathF.Min( limit, MathF.Max( 0f, nearest - point.Z + hidden ) / away );
+				if ( Room( _points[ _triangles[ t * 3 + corner ] ] ) is { } room && room <= hidden * 1.25f )
+					touching[ parts[ t ] - BoardPart.FrontTruck ]++;
 			}
 		}
-		return limit;
+		for ( var truck = 0; truck < 2; truck++ )
+			bolted[ truck ] = touching[ truck ] >= BoltedPoints;
+		var limit = float.PositiveInfinity;
+		var wheelRoom = float.PositiveInfinity;
+		for ( var t = 0; t < parts.Length; t++ )
+		{
+			var part = parts[ t ];
+			if ( Leans( part ) || part is BoardPart.FrontTruck or BoardPart.RearTruck && bolted[ part - BoardPart.FrontTruck ] )
+				continue;
+			var wheel = part >= BoardPart.FrontLeftWheel;
+			for ( var corner = 0; corner < 3; corner++ )
+			{
+				var point = _points[ _triangles[ t * 3 + corner ] ];
+				if ( Room( point ) is not { } room )
+					continue;
+				if ( wheel )
+					wheelRoom = MathF.Min( wheelRoom, room );
+				var away = MathF.Abs( point.Y - _centreY );
+				if ( away >= cell )
+					limit = MathF.Min( limit, room / away );
+			}
+		}
+		return (limit, bolted, wheelRoom);
 	}
 
 	// The parts that lean with the deck: the deck and the baseplates fixed under it.

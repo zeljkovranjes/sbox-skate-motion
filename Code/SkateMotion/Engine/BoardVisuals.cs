@@ -338,13 +338,21 @@ internal sealed class BoardVisuals
 		}
 		// The deck dips into a turn about its trucks' pivots; trucks and wheels stay level with the ground under it.
 		var deckPose = Blend( Leaned( shown ) );
+		// A truck bolted to the deck leans with it, and its wheels tilt with it, staying on the ground; the wheels never come
+		// closer to the deck than the room its lean leaves them.
+		var tilt = deckPose.Rotation * Blend( shown ).Rotation.Inverse;
+		var rise = WheelRise();
 		for ( var i = 0; i < 4; i++ )
 		{
-			wheels[ i ] = simulated ? Part( wheels[ i ], _wheelRest[ i ], i, true ) : deckPose.ToWorld( _wheelRest[ i ] );
+			wheels[ i ] = simulated ? Part( wheels[ i ], _wheelRest[ i ], i, true, rise ) : deckPose.ToWorld( _wheelRest[ i ] );
+			if ( simulated && Bolted( i / 2 ) )
+				wheels[ i ] = wheels[ i ].WithRotation( tilt * wheels[ i ].Rotation );
 			wheels[ i ] = wheels[ i ].WithRotation( wheels[ i ].Rotation * Spin( i ) );
 		}
 		for ( var i = 0; i < 2; i++ )
-			trucks[ i ] = simulated ? Part( trucks[ i ], _truckRest[ i ], 4 + i, true ) : deckPose.ToWorld( _truckRest[ i ] );
+			trucks[ i ] = !simulated ? deckPose.ToWorld( _truckRest[ i ] )
+				: Bolted( i ) ? Part( trucks[ i ], _truckRest[ i ], 4 + i, true, 0f, true )
+				: Part( trucks[ i ], _truckRest[ i ], 4 + i, true );
 		// A nose or tail slide's board is shown pitched up off the rail toward its middle (see SlideTip and UpdateTip).
 		UpdateTip( deckPose, rails );
 		if ( _tip > 0f )
@@ -598,15 +606,33 @@ internal sealed class BoardVisuals
 		return offset.Length > PartSlack ? local.WithPosition( rest.Position + offset.Normal * PartSlack ) : local;
 	}
 
-	private Transform Part( Transform physical, Transform rest, int slot, bool turn )
+	// A part rises toward the deck at most rise inches above its rest place; a leaned one is placed on the leaned deck.
+	private Transform Part( Transform physical, Transform rest, int slot, bool turn, float rise = float.PositiveInfinity,
+		bool leaned = false )
 	{
 		var local = PartOnDeck( _board.WorldTransform, physical, rest );
 		var stepped = _partSteps[ slot ].At( local, Time.Now );
 		local = new Transform( stepped.Position, turn ? stepped.Rotation : local.Rotation, local.Scale );
+		if ( local.Position.z > rest.Position.z + rise )
+			local = local.WithPosition( local.Position.WithZ( rest.Position.z + rise ) );
 		if ( _displayWeight > 0f )
 			local = new Transform( Vector3.Lerp( local.Position, rest.Position, _displayWeight ),
 				Rotation.Slerp( local.Rotation, rest.Rotation, _displayWeight ), local.Scale );
-		return Blend( _shown ).ToWorld( local );
+		return Blend( leaned ? Leaned( _shown ) : _shown ).ToWorld( local );
+	}
+
+	// Whether a truck is bolted to the deck and leans with it (a rig made before this was measured has none).
+	private bool Bolted( int truck ) => _rig.BoltedTrucks is { } bolted && bolted[ truck ];
+
+	// How far (inches) the wheels may come up toward the deck at its lean now: the room they have under the level deck,
+	// less what the lean takes (all of it at the most the deck leans, BoardRig.LeanLimit).
+	private float WheelRise()
+	{
+		var room = _rig.WheelRoom;
+		var limit = _rig.LeanLimit;
+		if ( !float.IsFinite( room ) )
+			return float.PositiveInfinity;
+		return !float.IsFinite( limit ) || limit <= 0f ? room : room * MathF.Max( 0f, 1f - MathF.Abs( Roll ) / limit );
 	}
 
 	// Inches a truck or wheel may sit away from its rest place on the deck.

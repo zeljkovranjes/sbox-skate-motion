@@ -19,14 +19,27 @@ public class BoardPartDetectorTests
 	}
 
 	[Fact]
-	public void HangersUpAgainstTheDeckKeepItFromLeaning()
+	public void TrucksUpAgainstTheDeckAreBoltedToItAndLeanWithIt()
 	{
-		// Hinges reaching the deck's underside 90 mm out from its middle: a deck leaning more than its hidden 2.4 mm over
-		// that (1.5 degrees) would come down through them.
+		// Hinges reaching the deck's underside lean with it, so only the wheels (34 mm under the deck) limit its lean.
 		var layout = BoardPartDetector.Detect( SyntheticBoard.BuildRigid().Mesh(), out var problem );
 
 		Assert.NotNull( layout );
-		Assert.InRange( layout.LeanLimit, 0.015f, 0.04f );
+		Assert.True( layout.BoltedTrucks[ 0 ] && layout.BoltedTrucks[ 1 ], problem );
+		Assert.True( layout.LeanLimit >= DeckLean.MaximumRoll, $"{layout.LeanLimit} rad" );
+	}
+
+	[Fact]
+	public void WheelsCloseUnderTheDeckLimitItsLeanAndTheirRise()
+	{
+		// The deck 4 mm over the wheels' tops, with 2.4 mm hidden in it: the wheels have 6.4 mm of room, which a lean of
+		// 6.4 / 82.5 radians (4.4 degrees) takes up at their inner faces, 82.5 mm out (their outer ones are past the deck).
+		var layout = BoardPartDetector.Detect( SyntheticBoard.BuildRigid( deckDrop: 0.03f ).Mesh(), out var problem );
+
+		Assert.NotNull( layout );
+		Assert.InRange( layout.WheelRoom, 0.0055f, 0.0075f );
+		Assert.InRange( layout.LeanLimit, 0.07f, 0.085f );
+		Assert.True( layout.BoltedTrucks[ 0 ] && layout.BoltedTrucks[ 1 ] );
 	}
 
 	[Fact]
