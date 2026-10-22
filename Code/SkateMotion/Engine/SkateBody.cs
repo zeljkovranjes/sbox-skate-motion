@@ -42,10 +42,8 @@ internal sealed class SkateBody
 	private float _offRail = 1f;
 	private const float RailLossHold = 0.15f;
 
-	// The deck's right before the grind (flat, metres), and how far across the rail's line the nose must be to say
-	// which side it is on.
-	private System.Numerics.Vector3 _approachRight;
-	private const float NoseSideClear = 0.02f;
+	// The deck's right as the board came along the rail (square across it, from before any turn onto it).
+	private readonly GrindApproach _approach = new();
 
 	/// <summary>True while the board rolls tail first faster than a walking pace.</summary>
 	internal bool Fakie
@@ -310,16 +308,17 @@ internal sealed class SkateBody
 		return new WallSight( SkateUnits.Metres( hit.HitPosition ), SkateUnits.ToCore( hit.Normal ), height );
 	}
 
-	// Off a rail, which side of the deck the nearest one is on (kept while it is too close to tell); on starting a
-	// grind, that side, or with none seen the way the board was moving across.
+	// Off a rail, which side of the deck the nearest one is on, across the deck's right as it came along that rail
+	// (kept while it is too close to tell); on starting a grind, that side, or with none seen the way the board was
+	// moving across.
 	private void TrackRailSide( ReadOnlySpan<RailSegment> rails, bool grinding )
 	{
 		var deck = _assembly.Deck;
-		var right = -deck.Left;
 		if ( !grinding )
 		{
-			_approachRight = new System.Numerics.Vector3( right.X, right.Y, 0f );
 			var nearest = float.MaxValue;
+			var toRail = System.Numerics.Vector3.Zero;
+			System.Numerics.Vector3? line = null;
 			foreach ( var rail in rails )
 			{
 				if ( !rail.IsValid )
@@ -329,28 +328,31 @@ internal sealed class SkateBody
 				if ( flat.LengthSquared() >= nearest )
 					continue;
 				nearest = flat.LengthSquared();
-				var across = System.Numerics.Vector3.Dot( flat, right );
-				if ( MathF.Abs( across ) > RailSideClear )
-					_railSide = across;
+				toRail = flat;
+				line = rail.Direction;
 			}
+			_approach.Track( deck.Forward, -deck.Left, line );
+			var across = _approach.Across( toRail );
+			if ( line is not null && MathF.Abs( across ) > RailSideClear )
+				_railSide = across;
 		}
 		else if ( !_grinding )
 		{
-			GrindRailOnRight = _railSide != 0f ? _railSide > 0f : System.Numerics.Vector3.Dot( deck.Velocity, right ) > 0f;
+			GrindRailOnRight = _railSide != 0f ? _railSide > 0f : _approach.Across( deck.Velocity ) > 0f;
 			// Until the nose is clearly to one side, it is taken to be on the side the board came from.
 			GrindNoseRight = !GrindRailOnRight;
 		}
 		_grinding = grinding;
 	}
 
-	// While grinding, which side of the rail the nose is on, measured against the deck's right before the grind.
+	// While grinding, which side of the rail the nose is on, across the deck's right as the board came onto the rail:
+	// after a quarter turn onto it the side the turn swung the nose to, however near square it locked on.
 	private void TrackNoseSide( in PhysicsStep result )
 	{
 		if ( result.Grind == GrindKind.None )
 			return;
-		var across = System.Numerics.Vector3.Dot( result.GrindShape.NoseOffset, _approachRight );
-		if ( MathF.Abs( across ) > NoseSideClear )
-			GrindNoseRight = across > 0f;
+		if ( _approach.NoseSide( _assembly.Deck.Forward ) is { } right )
+			GrindNoseRight = right;
 	}
 
 	// Metres across the deck a rail must be to count as on one side.
@@ -363,6 +365,7 @@ internal sealed class SkateBody
 	{
 		ReleaseTelemetry = null;
 		_airAssist.Reset();
+		_approach.Reset();
 		_bailed = false;
 		_pilot.Reset();
 		_assembly.Reset( SkateUnits.Metres( _body.WorldPosition ), SkateUnits.ToCore( _body.WorldRotation ),
