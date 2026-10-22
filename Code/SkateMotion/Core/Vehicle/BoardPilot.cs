@@ -379,7 +379,7 @@ internal sealed class BoardPilot
 				// Measured handling: riding a wall, the board is held to it and kept flat to it, and nobody pushes.
 				if ( _settings.Recovered && rider )
 				{
-					var (hold, keep, away) = _wall.OnSurface( body, normal, step );
+					var (hold, keep, away) = _wall.OnSurface( body, normal, step, _settings.Gravity );
 					if ( hold != Vector3.Zero )
 					{
 						assembly.AddForce( 0, hold * _settings.Mass, body.Position );

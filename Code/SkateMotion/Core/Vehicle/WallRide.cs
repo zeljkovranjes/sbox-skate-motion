@@ -44,8 +44,16 @@ internal sealed class WallRide
 	internal const float LooseHold = 0.15f;
 
 	/// <summary>Speed (m/s) down the wall at which the ride ends, and the speed (m/s) the board steps off the wall at.</summary>
-	internal const float SlideDown = 1f;
+	internal const float SlideDown = 1.9f;
 	internal const float StepOff = 1f;
+
+	/// <summary>
+	/// Share of the board's weight the wall carries while it is ridden, and the seconds over which the wall takes away the
+	/// fall the board meets it with as the ride starts: the board arcs down the wall over the ride rather than dropping
+	/// off it (with the fall it met the wall with and all of its weight, a ride off a kicker lasted 0.12 to 0.2 s).
+	/// </summary>
+	internal const float Carry = 0.5f;
+	internal const float Catch = 0.1f;
 
 	// Acceleration (m/s^2) holding the board to the wall, the fastest the board turns (rad/s) and how quickly (seconds)
 	// it follows, and how long (seconds) turning back upright takes.
@@ -99,10 +107,12 @@ internal sealed class WallRide
 	}
 
 	/// <summary>
-	/// On a surface with this normal: while riding a wall, the acceleration holding the board to it and the change of
-	/// angular velocity keeping its wheels flat to it. A surface that is not steep ends the wall ride.
+	/// On a surface with this normal: while riding a wall, the acceleration holding the board to it (and carrying part of
+	/// its weight under <paramref name="gravity"/>) and the change of angular velocity keeping its wheels flat to it. A
+	/// surface that is not steep ends the wall ride.
 	/// </summary>
-	internal (Vector3 Hold, Vector3 Spin, Vector3 Away) OnSurface( in BoardBody body, Vector3 normal, float step )
+	internal (Vector3 Hold, Vector3 Spin, Vector3 Away) OnSurface( in BoardBody body, Vector3 normal, float step,
+		float gravity = 0f )
 	{
 		if ( MathF.Abs( normal.Z ) >= 0.5f )
 		{
@@ -125,7 +135,11 @@ internal sealed class WallRide
 			return (Vector3.Zero, Vector3.Zero, normal * StepOff);
 		}
 		_normal = normal;
-		return (-normal * Press, Turn( body, normal, Along( body, normal ), Response, step ), Vector3.Zero);
+		// The wall carries part of the board's weight, and as the ride starts takes away the fall it met the wall with.
+		var lift = gravity * Carry;
+		if ( _time < Catch && body.Velocity.Z < 0f )
+			lift -= body.Velocity.Z / MathF.Max( Catch - _time, step );
+		return (-normal * Press + Vector3.UnitZ * lift, Turn( body, normal, Along( body, normal ), Response, step ), Vector3.Zero);
 	}
 
 	internal void Reset()
