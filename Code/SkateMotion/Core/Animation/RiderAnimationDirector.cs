@@ -23,9 +23,10 @@ internal sealed class RiderAnimationDirector
 	private float _wall;
 	private float _balance;
 	private float _impactBlend;
+	private bool _impactShown;
 
-	// Rate (per second) the impact blend eases toward a landing's impact on the ground: quicker than the other blends, so a
-	// landing gives at once, yet over a few frames.
+	// Rate (per second) the impact blend eases toward a landing's impact on the ground, and the board adjust's in the air:
+	// quicker than the other blends, so a landing gives and a board adjust answers at once, yet over a few frames.
 	private const float ImpactEase = 15f;
 
 	/// <param name="clipsGoofy">Whether the clips were authored with the right foot forward.</param>
@@ -156,11 +157,14 @@ internal sealed class RiderAnimationDirector
 		// In the air this weight is the board adjust's magnitude: how far the trick stick is held over, which blends in a
 		// board adjust and tweaks the nose and tail grabs. On the ground it is the last landing's impact, which eases in: taken
 		// in a frame it gave the riding pose's knees and arms at once (a board thrown off its wheels at a bank's foot and
-		// meeting its face turned the head 10 degrees and an arm 24 in a frame).
-		if ( input.Airborne )
-			_impactBlend = Math.Min( 1f, MathF.Sqrt( input.AirStickX * input.AirStickX + input.AirStickY * input.AirStickY ) );
-		else
-			_impactBlend += (Math.Clamp( input.LandingSpeed / 6f, 0f, 1f ) - _impactBlend) * (1f - MathF.Exp( -ImpactEase * delta ));
+		// meeting its face turned the head 10 degrees and an arm 24 in a frame). It eases the same way in the air and across
+		// the take-off and the landing: switched in a frame from the ground's weight to the stick's, every board adjust and
+		// grab the take-off went into moved the fingers and hands in one frame. Only the first weight given is taken at once.
+		var impact = input.Airborne
+			? Math.Min( 1f, MathF.Sqrt( input.AirStickX * input.AirStickX + input.AirStickY * input.AirStickY ) )
+			: Math.Clamp( input.LandingSpeed / 6f, 0f, 1f );
+		_impactBlend = _impactShown ? _impactBlend + (impact - _impactBlend) * (1f - MathF.Exp( -ImpactEase * delta )) : impact;
+		_impactShown = true;
 		parameters.Set( "blend-impact", _impactBlend );
 		LandingBlend( input, parameters );
 		// The deck's pitch eases into the balance blend like the other blends: riding onto a bank pitched the deck over a few
