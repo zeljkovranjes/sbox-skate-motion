@@ -3,6 +3,8 @@
 ## 2026-10-21
 Title: Animation Out of the Box, Smooth Motion, Planted Feet and Grabs That Hold
 ### Added
+# Board
+Board model levels of detail - Skateboard.BoardModelLevels takes a board model's lower levels of detail as models of their own (a model's own lower levels cannot be read from code). Each is taken apart along the parts found on BoardModel, each triangle going to the part of the first level's nearest one, so its wheels spin and trucks steer as the first level's do, and each part switches where BoardModel's LOD groups do. The split board drew its first level at every distance
 # Controls
 Shaking before it flies - SkateRider.RecallShake (seconds, 0 by default) has a board called from more than 200 in away tremble where it lies first, growing stronger and rising up to 5 in off the ground (jittering up to 1.5 in and 14 degrees), then fly from there
 Board called - SkateRider.BoardCalled( shake, flight ) is raised where the rider is simulated as its board is called to the hand, with the seconds it shakes and then flies, so a game can time a sound or an effect to it
@@ -41,6 +43,8 @@ Flip sweep - in the air a deck rolling over (a kickflip, a heelflip) drops away 
 # Input
 One trick at a time - a trick plays to its end before the next can start: on the ground, from a trick's pop to the end of its landing (the rider's OnBoard.Trick and OnBoard.Land states), SkateRider lets the trick stick go, from the keys, the mouse and a controller alike, so a pop pressed during a landing no longer cuts its animation short. In the air the stick stays free, for grabs, late flips and a flip held on. LocalSkateInput.ReadKeys takes ready: while it is false the mouse stick lets go
 ### Fixed
+# Board
+Board models with levels of detail - a model with LOD meshes was read as one list drawn with its first material (its vertex and index lists hold its first level's meshes alone, and every level's meshes were counted against them); its first level is now read mesh by mesh, each with its own material
 # Physics
 Powerslides gliding sideways - while powersliding the wheels keep only a share of their grip (so the board can swing across its travel), and nothing else slowed it: a held slide from a fast push glided sideways for over four seconds (1.7 m/s^2, on grass as on concrete). Turned across its travel the board now scrubs as sliding urethane does, up to 3 m/s^2 more as far as it is across: the same slide stops in 1.9 s (4.2 m/s^2)
 Window - the map is gathered 4 m each way around the board and gathered again after 2 m (was 12 m and 4 m), contacts offered from 1 m around its bodies (was 2 m): every contact a step can take stays inside the window with 0.7 m to spare

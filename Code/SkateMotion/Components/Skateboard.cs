@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Sandbox;
 using SkateMotion.Core.Grinding;
 using SkateMotion.Engine;
@@ -42,7 +43,28 @@ public sealed class Skateboard : Component, IBoardDisplay
 		}
 	}
 
+	/// <summary>
+	/// The board model's lower levels of detail, nearest first, each a model of its own (a model's own lower levels cannot
+	/// be read from code). Each is taken apart along the parts found on <see cref="BoardModel"/>, so its wheels spin and its
+	/// trucks steer as the first level's do, and switches in where <see cref="BoardModel"/>'s own levels do (the switch
+	/// thresholds of its LOD groups). Changing them rebuilds the board.
+	/// </summary>
+	[Property, Title( "Board Model Levels" )]
+	public List<Model> BoardModelLevels
+	{
+		get => _boardModelLevels;
+		set
+		{
+			if ( _boardModelLevels == value )
+				return;
+			_boardModelLevels = value ?? new List<Model>();
+			if ( _adapter is not null )
+				Rebuild();
+		}
+	}
+
 	private Model _boardModel;
+	private List<Model> _boardModelLevels = new();
 	private BoxCollider _deckCollider;
 
 	/// <summary>The board's size as simulated, and where its shown parts come from.</summary>
@@ -369,7 +391,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 			settings = settings with { BailSpeed = HardestLanding };
 		var radius = Profile?.WheelRadius ?? 0.0285f;
 		string problem = null;
-		var parts = BoardModel is null ? null : BoardModelParts.Of( BoardModel, out problem );
+		var parts = BoardModel is null ? null : BoardModelParts.Of( BoardModel, BoardModelLevels, out problem );
 		if ( BoardModel is not null && parts is null )
 			Log.Warning( $"Skateboard {GameObject.Name}: the parts of {BoardModel.ResourceName} could not be found (it {problem}), so it is "
 				+ "shown whole, without steering trucks or spinning wheels. Separate meshes for its wheels, or bones named for "
