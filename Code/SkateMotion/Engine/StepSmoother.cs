@@ -87,10 +87,9 @@ internal sealed class StepSmoother
 	internal Transform At( Transform actual, float now )
 	{
 		var at = Smoothed( actual, now );
-		if ( !(_easeLength > 0f) || now - _easeFrom >= _easeLength )
+		var left = Core.Animation.ShownEase.Left( now - _easeFrom, _easeLength );
+		if ( left <= 0f )
 			return at;
-		var amount = Math.Clamp( (now - _easeFrom) / _easeLength, 0f, 1f );
-		var left = 1f - amount * amount * (3f - 2f * amount);
 		return at.ToWorld( new Transform( _easeOffset.Position * left, Rotation.Slerp( Rotation.Identity, _easeOffset.Rotation, left ),
 			Vector3.One ) );
 	}

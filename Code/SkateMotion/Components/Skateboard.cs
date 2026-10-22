@@ -631,6 +631,8 @@ public sealed class Skateboard : Component, IBoardDisplay
 
 		var wasBailed = State.IsBailed;
 		var previousGrind = State.Grind;
+		var wasPlanting = State.HandPlanting;
+		var shownBefore = RenderTransform;
 		var started = System.Diagnostics.Stopwatch.GetTimestamp();
 		var railCount = Scene.GetSystem<GrindRails>()?.Collect( WorldPosition, RailSearchInches, _rails ) ?? 0;
 		_adapter.AnimatedTricks = Time.Now - _displayedAt < AnimationTimeout;
@@ -695,7 +697,18 @@ public sealed class Skateboard : Component, IBoardDisplay
 			RunoutRequested?.Invoke();
 		Stepped?.Invoke( _input );
 		PublishState();
-		_smooth.Record( WorldTransform, Time.Now, Time.Delta );
+		if ( wasPlanting && !State.HandPlanting && !State.IsBailed )
+		{
+			// The hand plant let go: physics turned the board nose down into the ramp in one step. Shown (and so the rider
+			// riding it), it turns there from where it was shown over ShownEase.PlantLetGo, falling as physics has it.
+			_smooth.Reset();
+			_smooth.Record( WorldTransform, Time.Now, Time.Delta );
+			_smooth.EaseFrom( shownBefore, WorldTransform, Time.Now, Core.Animation.ShownEase.PlantLetGo );
+		}
+		else
+		{
+			_smooth.Record( WorldTransform, Time.Now, Time.Delta );
+		}
 		if ( _adapter is not null && Body.IsValid() && Simulating )
 			_visuals?.RecordStep( _adapter.Bodies, Time.Now, Time.Delta );
 	}
