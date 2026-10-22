@@ -460,6 +460,7 @@ internal sealed class RiderAnimator
 			ObjectHeight = objectHeight,
 			HippyJump = _hippy || input.HippyJump || hippy?.Flying == true || (input.Brake > 0.5f && input.FlickY < -0.6f),
 			HippyCrouch = hippy?.Crouching == true,
+			HippyCharge = hippy?.Charge ?? 0f,
 			BodyFlipping = board.BodyFlip != 0,
 			WallRiding = board.WallRiding,
 			Crouch = board.Crouch,

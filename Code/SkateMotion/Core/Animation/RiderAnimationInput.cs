@@ -126,6 +126,9 @@ internal readonly record struct RiderAnimationInput
 	/// <summary>True while the hippy jump control is held on the board (its crouch).</summary>
 	internal bool HippyCrouch { get; init; }
 
+	/// <summary>How far the hippy jump's crouch has wound it up (0 a quick one, 1 a full crouch), held through its flight.</summary>
+	internal float HippyCharge { get; init; }
+
 	/// <summary>True while the rider is off the board in a hippy jump, with its height above the deck (m), its speed
 	/// toward it (positive rising), whether the board is still under it, and the seconds until it is back down.</summary>
 	internal bool OffBoard { get; init; }

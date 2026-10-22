@@ -888,6 +888,7 @@ internal sealed class ClipRiderAnimation
 				+ (lip - model.PointToWorld( SkateUnits.ToEngine( _positions[ _plantHand ] ) )) * Smoothstep( _plantWeight ) );
 		if ( _hipDrop > 0f )
 			model = model.WithPosition( model.Position + Vector3.Down * _hipDrop );
+		model = HippyFlight( model, input, mirror, delta );
 		var flipped = _shownValid && mirror != _shownMirror;
 		EaseFlip( model, flipped, delta );
 		// Turned round, the eased pose carries on from what was last shown, with the feet's pulls onto the deck and their
@@ -3751,6 +3752,40 @@ internal sealed class ClipRiderAnimation
 			_rotations[ bone ] = System.Numerics.Quaternion.Normalize(
 				System.Numerics.Quaternion.Slerp( System.Numerics.Quaternion.Identity, _flipRotations[ bone ], remaining ) * _rotations[ bone ] );
 		}
+	}
+
+	// Off the board in a hippy jump the body flies the jump's own flight above the deck (see RiderAnimator.Root), and its
+	// clips rise off their board too, the crouch springing up into a tuck: added, the rider went a body length up, the hips
+	// 74 in over the deck and the feet 63, and fell 19 in in the 0.13 s the landing's clip took to bring them back down. The
+	// clips' rise counts toward the flight instead: the hips go as high as the higher of the two (the flight's measured from
+	// where the hips were as the rider left the deck), the one taking over from the other smoothly, and what is taken off
+	// eases out as the rider lands.
+	private float _flightHips = float.NaN;
+	private float _flightWeight;
+
+	// Inches over which the higher of the clips' and the flight's hips heights takes over from the other, and seconds the
+	// height taken off eases out over once the rider is back on the deck.
+	private const float FlightJoin = 4f;
+	private const float FlightEase = 0.2f;
+
+	private Transform HippyFlight( Transform model, RiderAnimationInput input, bool mirror, float delta )
+	{
+		var hips = _anchor >= 0 && Rig[ "hips" ] >= 0 ? _retargeter.SourceBone( Rig[ "hips" ], mirror ) : -1;
+		_flightWeight = input.OffBoard && hips >= 0 ? 1f : MathF.Max( 0f, _flightWeight - delta / FlightEase );
+		if ( hips < 0 || _flightWeight <= 0f )
+		{
+			_flightHips = float.NaN;
+			return model;
+		}
+		var rise = _retargeter.SourceOffset( hips, mirror ).Z - _retargeter.SourceOffset( _anchor, mirror ).Z;
+		if ( !float.IsFinite( _flightHips ) )
+			_flightHips = rise;
+		var flight = input.OffBoard ? input.OffBoardHeight * SkateUnits.InchesPerMetre : 0f;
+		var flown = _flightHips + flight;
+		// A smooth maximum, less what it adds where the two meet, so the body leaves the deck without a step.
+		var higher = 0.5f * (rise + flown + MathF.Sqrt( (rise - flown) * (rise - flown) + FlightJoin * FlightJoin ) - FlightJoin);
+		var drop = (rise + flight - higher) * Smoothstep( _flightWeight );
+		return float.IsFinite( drop ) ? model.WithPosition( model.Position + Vector3.Down * drop ) : model;
 	}
 
 	private static float Smoothstep( float value )

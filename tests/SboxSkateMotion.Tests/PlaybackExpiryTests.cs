@@ -61,7 +61,10 @@ public class PlaybackExpiryTests
 			for ( var frame = 0; frame < rate; frame++ )
 			{
 				player.Update( facts, parameters, 1f / rate, pose );
-				Assert.True( pose.Positions[ 0 ].X >= previous - .0001f,
+				// A clip change carries the speed the pose was moving at, so arriving at the hold the pose runs on a little
+				// past it and settles back (at most half a unit in a frame, at 30 fps). Wrapping round to the intro's start
+				// would drop it 5 to 6 units in a frame. (Before the speed was carried this allowed no step back at all.)
+				Assert.True( pose.Positions[ 0 ].X >= previous - 1f,
 					$"Pose wrapped at rate {rate}, offset {offset}, frame {frame}" );
 				previous = pose.Positions[ 0 ].X;
 			}

@@ -26,6 +26,12 @@ internal sealed class StateGraphPlayer
 	private readonly Vector3[] _lagPositions;
 	private readonly Vector3[] _lagTurns;
 	private bool _shownRates;
+
+	// Each bone's offset speed at a change (its shown speed less the new clip's), and the step the change was shown on:
+	// the offset falls from where it was, at that speed, to nothing over the fade (see Inertialize).
+	private Vector3[] _offsetPositionRates;
+	private Vector3[] _offsetTurnRates;
+	private float _changeStep;
 	private float _lagTime = float.PositiveInfinity;
 	private float _lagLength;
 
@@ -83,6 +89,8 @@ internal sealed class StateGraphPlayer
 		_ahead = new SkeletonPose( clips.Skeleton.Count );
 		_lagPositions = new Vector3[ clips.Skeleton.Count ];
 		_lagTurns = new Vector3[ clips.Skeleton.Count ];
+		_offsetPositionRates = new Vector3[ clips.Skeleton.Count ];
+		_offsetTurnRates = new Vector3[ clips.Skeleton.Count ];
 		_shown = new SkeletonPose( clips.Skeleton.Count );
 		_before = new SkeletonPose( clips.Skeleton.Count );
 		_from.SetRest( clips.Skeleton );
@@ -141,9 +149,9 @@ internal sealed class StateGraphPlayer
 				widest = MathF.Max( widest, turn );
 		}
 		// A change far from the pose shown takes longer: the offset falls off along a smooth curve whose fastest turn is
-		// half again its average, so the fade lasts long enough that no bone turns faster than FastestTurn on the way (a
+		// 1.875 times its average, so the fade lasts long enough that no bone turns faster than FastestTurn on the way (a
 		// slide started from a spin's pose whipped the head round in a few frames).
-		_fadeTime = MathF.Max( _fadeTime, 1.5f * widest / FastestTurn );
+		_fadeTime = MathF.Max( _fadeTime, 1.875f * widest / FastestTurn );
 		CaptureLag( speed, parameters );
 	}
 
@@ -191,26 +199,32 @@ internal sealed class StateGraphPlayer
 			_outgoing = null;
 	}
 
-	// The offsets keep the pose through a change but not the speed: the new clip's own motion shows at full speed from
-	// the frame it starts, so a bone it moves faster than the bone was moving (a push cycle that opens with a quick
-	// lead-in, which a crossfade would have hidden under a low weight) jumped to that speed in one frame, and one it
-	// moves slower stopped dead. Each bone instead starts at the speed it was shown moving, and the difference dies
-	// away over the fade. The difference carried is never more than the new clip's own speed, so a bone that clip
-	// holds still is never carried past it, and no bone turns back. It is taken in the new clip's own frame, under the
-	// change's offset, where the clip's motion is: carried over the offset instead, a turn the clip makes about the
-	// bone (a knee twisting about the shin as a push begins) would come out as a swing of the bone, as far off as the
-	// offset turns it.
+	// The offsets keep the pose through a change, and the speed too. Kept to the pose alone, the new clip's own motion
+	// showed at full speed from the frame it started, so a bone it moves faster than the bone was moving (a push cycle
+	// that opens with a quick lead-in) jumped to that speed in one frame, and one it moves slower stopped dead. Each
+	// bone's offset instead moves at first at the speed the bone was shown moving less the new clip's (turns in the
+	// parent's frame, the clip's own carried under the offset), and dies away along its own curve (see Inertialize).
+	// The board's offset changes as it plays its last clip out, so its speed is carried apart, never more than the new
+	// clip's own speed and taken in that clip's frame, under the offset, where the clip's motion is: carried over the
+	// offset instead, a turn the clip makes about the board would come out as a swing of it.
 	private void CaptureLag( float speed, AnimationParameters parameters )
 	{
 		_lagTime = float.PositiveInfinity;
+		OffsetRates();
+		Array.Clear( _offsetPositionRates );
+		Array.Clear( _offsetTurnRates );
 		if ( !_shownRates || !(_fadeTime > 0f) || !(MathF.Abs( speed ) > 0f) )
 			return;
 		_ahead.Sample( _clip, _clips.Skeleton, _time + SpeedSample * speed, true, parameters );
 		for ( var bone = 0; bone < _lagTurns.Length; bone++ )
 		{
-			_lagPositions[ bone ] = Lag( (_ahead.Positions[ bone ] - _scratch.Positions[ bone ]) / SpeedSample, _shownPositionRates[ bone ] );
+			var move = (_ahead.Positions[ bone ] - _scratch.Positions[ bone ]) / SpeedSample;
+			var turn = Turn( _ahead.Rotations[ bone ], _scratch.Rotations[ bone ] ) / SpeedSample;
+			_offsetPositionRates[ bone ] = _shownPositionRates[ bone ] - move;
+			_offsetTurnRates[ bone ] = _shownTurnRates[ bone ] - Vector3.Transform( turn, _offsetRotations[ bone ] );
+			_lagPositions[ bone ] = Lag( move, _shownPositionRates[ bone ] );
 			var shown = Vector3.Transform( _shownTurnRates[ bone ], Quaternion.Conjugate( _offsetRotations[ bone ] ) );
-			_lagTurns[ bone ] = Lag( Turn( _ahead.Rotations[ bone ], _scratch.Rotations[ bone ] ) / SpeedSample, shown );
+			_lagTurns[ bone ] = Lag( turn, shown );
 		}
 		_lagTime = 0f;
 		_lagLength = Math.Min( _fadeTime, MinimumBlend );
@@ -230,16 +244,18 @@ internal sealed class StateGraphPlayer
 	// and is on the clip with both matched by then. Its speed back is at most about half the difference, so the bone
 	// never moves against the new clip's motion, and a short clip (a push's contact, an intro) is on its own motion well
 	// before it ends, so the change after it carries that motion on rather than the catching up.
+	// Only the board is held back this way (its offset changes as it plays its last clip out); every other bone's speed
+	// is carried by its offset's own curve (see Inertialize).
 	private void ApplyLag( SkeletonPose clip, float delta )
 	{
 		if ( !(_lagTime < _lagLength) )
 			return;
 		var s = _lagTime / _lagLength;
 		var share = _lagLength * s * (1f + s * s * (-6f + s * (8f - 3f * s)));
-		for ( var bone = 0; bone < _lagTurns.Length; bone++ )
+		if ( Board >= 0 && Board < _lagTurns.Length )
 		{
-			clip.Positions[ bone ] += _lagPositions[ bone ] * share;
-			clip.Rotations[ bone ] = Quaternion.Normalize( Rotation( _lagTurns[ bone ] * share ) * clip.Rotations[ bone ] );
+			clip.Positions[ Board ] += _lagPositions[ Board ] * share;
+			clip.Rotations[ Board ] = Quaternion.Normalize( Rotation( _lagTurns[ Board ] * share ) * clip.Rotations[ Board ] );
 		}
 		_lagTime += delta;
 	}
@@ -292,18 +308,59 @@ internal sealed class StateGraphPlayer
 	// Most frames of the last step's motion a change carries on over (a long frame after a short one).
 	private const float MaximumCarry = 2f;
 
+	// Each bone's offset falls from where it was at the change, at the speed it was moving away from the new clip, to
+	// nothing with no speed or acceleration left as the fade ends (a quintic: standard inertialization). Faded along a
+	// curve that starts still, with the speed carried apart and cut to the new clip's own, a bone the new clip holds
+	// still stopped dead as the change began: as a flip left the ground the arms swinging up through the pop stopped in a
+	// frame (a hand at 400 in/s to 70). Carried by the offset's own curve, the swing goes on a little and comes round onto
+	// the new clip. The board keeps a smooth curve (its offset changes as it plays its last clip out) and its own carry.
 	private void Inertialize( SkeletonPose output )
 	{
-		// The remaining share of the offset falls along a smooth curve, so the change has no sudden start or end.
 		var remaining = 1f - _fade * _fade * (3f - 2f * _fade);
+		// The pose a change starts from is already the change frame's (carried on a step), so the curve's clock starts
+		// there and ends with the fade.
+		var length = MathF.Max( _fadeTime - _changeStep, 1e-4f );
+		var at = Math.Clamp( _fade * _fadeTime - _changeStep, 0f, length );
+		OffsetRates();
 		output.CopyFrom( _from );
 		output.BlendToward( _scratch, _fade );
 		for ( var bone = 0; bone < _offsetRotations.Length; bone++ )
 		{
-			output.Positions[ bone ] = _scratch.Positions[ bone ] + _offsetPositions[ bone ] * remaining;
-			output.Rotations[ bone ] = Quaternion.Normalize(
-				Quaternion.Slerp( Quaternion.Identity, _offsetRotations[ bone ], remaining ) * _scratch.Rotations[ bone ] );
+			if ( bone == Board )
+			{
+				output.Positions[ bone ] = _scratch.Positions[ bone ] + _offsetPositions[ bone ] * remaining;
+				output.Rotations[ bone ] = Quaternion.Normalize(
+					Quaternion.Slerp( Quaternion.Identity, _offsetRotations[ bone ], remaining ) * _scratch.Rotations[ bone ] );
+				continue;
+			}
+			output.Positions[ bone ] = _scratch.Positions[ bone ] + Quintic( _offsetPositions[ bone ], _offsetPositionRates[ bone ], at, length );
+			var turn = Quintic( Turn( _offsetRotations[ bone ], Quaternion.Identity ), _offsetTurnRates[ bone ], at, length );
+			output.Rotations[ bone ] = Quaternion.Normalize( Rotation( turn ) * _scratch.Rotations[ bone ] );
 		}
+	}
+
+	// The offsets' speeds, one per bone, made here as well as at construction: a player made before a hot reload added
+	// them never had them made, and threw on every frame.
+	private void OffsetRates()
+	{
+		if ( _offsetPositionRates is null || _offsetPositionRates.Length != _offsetRotations.Length )
+			_offsetPositionRates = new Vector3[ _offsetRotations.Length ];
+		if ( _offsetTurnRates is null || _offsetTurnRates.Length != _offsetRotations.Length )
+			_offsetTurnRates = new Vector3[ _offsetRotations.Length ];
+	}
+
+	// Where a value starting at x with speed v is after t of a fade lasting length that ends on zero with no speed or
+	// acceleration.
+	private static Vector3 Quintic( Vector3 x, Vector3 v, float t, float length )
+	{
+		if ( t >= length )
+			return Vector3.Zero;
+		var l2 = length * length;
+		var l3 = l2 * length;
+		var a = -(6f * v * length + 12f * x) / (2f * l3 * l2);
+		var b = (16f * v * length + 30f * x) / (2f * l2 * l2);
+		var c = -(12f * v * length + 20f * x) / (2f * l3);
+		return (a * t + b) * t * t * t * t + c * t * t * t + v * t + x;
 	}
 
 
@@ -356,7 +413,8 @@ internal sealed class StateGraphPlayer
 				var outgoing = _clip is null ? 0f : Math.Max( _clip.Length( parameters ), 0.0001f );
 				var phase = _clip is null ? 0f : _time / outgoing;
 				var first = _clip is null;
-				phase -= MathF.Floor( phase );
+				// A one-shot held past its end has run its pass: it is shown at its end, not part way round another.
+				phase = _clip is { Blend: null, Looping: false } ? Math.Min( phase, 1f ) : phase - MathF.Floor( phase );
 				if ( !first && Board >= 0 && speed > 0f && (1f - phase) * outgoing <= PlayOut )
 					PlayOutFrom( _clip, phase * outgoing, outgoing, speed, parameters );
 				// A clip left within a frame of the end of its pass has run it: the next carries on from the start of its
@@ -393,7 +451,10 @@ internal sealed class StateGraphPlayer
 		if ( _fade < 1f )
 		{
 			if ( _fade <= 0f )
+			{
 				CaptureOffsets( (Graph.Play?.Speed ?? 1f) * RateScale, parameters );
+				_changeStep = delta;
+			}
 			else
 				PlayOutBoard( delta, parameters );
 			_fade = Math.Min( 1f, _fade + delta / Math.Max( _fadeTime, 0.0001f ) );

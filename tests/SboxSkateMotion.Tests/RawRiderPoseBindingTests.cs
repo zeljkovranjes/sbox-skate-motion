@@ -62,6 +62,31 @@ public class RawRiderPoseBindingTests
 	}
 
 	[Theory]
+	[InlineData( (byte)0, false )]
+	[InlineData( (byte)1, true )]
+	[InlineData( (byte)2, true )]
+	public void BindingTakesTheSourcePlayback( byte flags, bool looping )
+	{
+		// A one-shot in the source holds its last pose played past its end; a loop, or a cycle whose phase is driven, goes
+		// round.
+		var clips = Legacy();
+		clips.BindRawPoses( RawAnimationClipSet.Read( Bank( flags: flags ) ) );
+		var clip = clips.Find( "sample" );
+		Assert.Equal( looping, clip.Looping );
+		Assert.Equal( looping ? .25f : 1f, clip.RawSampleTime( 1.25f, true ) );
+	}
+
+	[Fact]
+	public void GraphLoopEntryOverridesTheSourcePlayback()
+	{
+		var clips = Legacy();
+		clips.BindRawPoses( RawAnimationClipSet.Read( Bank( flags: 0 ) ) );
+		var clip = clips.Find( "sample" );
+		clip.Looping = true;
+		Assert.Equal( .25f, clip.RawSampleTime( 1.25f, true ) );
+	}
+
+	[Theory]
 	[InlineData( "other", "root", 2f )]
 	[InlineData( "sample", "other", 2f )]
 	[InlineData( "sample", "root", 3f )]
@@ -81,7 +106,7 @@ public class RawRiderPoseBindingTests
 		return new ClipSet( skeleton, new[] { clip } );
 	}
 
-	private static byte[] Bank( string name = "sample", string bone = "root", float fps = 2f )
+	private static byte[] Bank( string name = "sample", string bone = "root", float fps = 2f, byte flags = 0 )
 	{
 		using var stream = new MemoryStream();
 		using var writer = new BinaryWriter( stream );
@@ -100,7 +125,7 @@ public class RawRiderPoseBindingTests
 		writer.Write( (ushort)3 );
 		writer.Write( (ushort)0 );
 		writer.Write( (byte)1 );
-		writer.Write( (byte)0 );
+		writer.Write( flags );
 		writer.Write( new byte[] { 1, 1, 1 } );
 		foreach ( var value in new[] { 4f, 5f, 6f, .25f, 0f, 0f, 0f, 1f, 2f, 3f, 4f, 5f } )
 			writer.Write( value );

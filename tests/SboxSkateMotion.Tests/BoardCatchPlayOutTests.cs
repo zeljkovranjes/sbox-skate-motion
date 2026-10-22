@@ -28,9 +28,13 @@ public class BoardCatchPlayOutTests
 	[Fact]
 	public void WithoutABoardTheChangeEasesFromWhereTheClipWasLeft()
 	{
-		// Any other bone takes the new clip from where it was left, the offset easing out over the fade.
+		// Any other bone takes the new clip from where it was left, the offset easing out over the fade, and carries the
+		// speed it was turning at (6 degrees a frame here) rather than stopping dead at the change; only the board plays its
+		// last clip out to the catch. (Before the speed was carried the bone stopped, and 0.05 s on was still over 20 degrees
+		// from the new clip.)
 		var shown = Run( Player(), out var change );
-		Assert.True( Degrees( shown[ change + 6 ] ) > 20f, $"{Degrees( shown[ change + 6 ] ):F0} deg 0.05 s after the change" );
+		var turned = Degrees( shown[ change ] ) - Degrees( shown[ change + 1 ] );
+		Assert.True( turned > 3f, $"{turned:F1} deg turned the frame after the change" );
 	}
 
 	// Plays the flip until the graph leaves it and on through the fade; the bone's rotation each frame, and the frame of the

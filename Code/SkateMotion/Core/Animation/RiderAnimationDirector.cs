@@ -153,7 +153,11 @@ internal sealed class RiderAnimationDirector
 		// A grab's tweak: the trick stick held while grabbing (x toward the toes, y forward) blends its tweaked poses.
 		parameters.Set( "tweak_x", input.TweakX );
 		parameters.Set( "tweak_y", input.TweakY );
-		parameters.Set( "blend-pop-height", input.HighPop ? 1f : 0f );
+		// A hippy jump's clips are picked by how far its own crouch wound it up, as its flight's height is: a quick crouch
+		// hops up upright, a full one leaps into the hurdle's lean. Read from the last trick's pop instead, a high ollie
+		// earlier leant every hippy jump after it 60 degrees along the board.
+		parameters.Set( "blend-pop-height", input.HippyCrouch || input.OffBoard ? Math.Clamp( input.HippyCharge, 0f, 1f )
+			: input.HighPop ? 1f : 0f );
 		parameters.Set( "blend-windup", Math.Clamp( input.Windup, 0f, 1f ) );
 		// In the air this weight is the board adjust's magnitude: how far the trick stick is held over, which blends in a
 		// board adjust and tweaks the nose and tail grabs. On the ground it is the last landing's impact, which eases in: taken

@@ -29,6 +29,12 @@ internal sealed class HippyJump
 	/// <summary>The rider's speed toward or away from the deck: positive while still rising off it.</summary>
 	internal float VerticalSpeed { get; private set; }
 
+	/// <summary>
+	/// How far the crouch has wound the jump up, 0 for a quick one to 1 for a full crouch: while it is held, and through
+	/// the flight it gave. Zero otherwise.
+	/// </summary>
+	internal float Charge { get; private set; }
+
 	/// <summary>True while the board is still close enough under the rider to land back on.</summary>
 	internal bool OverBoard => new Vector3( Offset.X, Offset.Y, 0f ).Length() <= LandReach;
 
@@ -71,14 +77,19 @@ internal sealed class HippyJump
 		if ( held )
 		{
 			_crouch += step;
+			Charge = Math.Clamp( _crouch / FullCrouch, 0f, 1f );
 			return Outcome.None;
 		}
 		var crouch = _crouch;
 		_crouch = 0f;
 		if ( !released || !boardGrounded )
+		{
+			Charge = 0f;
 			return Outcome.None;
+		}
 		// Rising from standing height to the apex takes this upward speed.
-		var apex = LowApex + (HighApex - LowApex) * Math.Clamp( crouch / FullCrouch, 0f, 1f );
+		Charge = Math.Clamp( crouch / FullCrouch, 0f, 1f );
+		var apex = LowApex + (HighApex - LowApex) * Charge;
 		var rise = MathF.Sqrt( MathF.Max( 0f, (apex - Standing) * 2f * _gravity ) );
 		_velocity = new Vector3( boardVelocity.X, boardVelocity.Y, boardVelocity.Z + rise );
 		Offset = Vector3.Zero;
@@ -91,6 +102,7 @@ internal sealed class HippyJump
 	{
 		Flying = false;
 		_crouch = 0f;
+		Charge = 0f;
 		_velocity = Vector3.Zero;
 		Offset = Vector3.Zero;
 		VerticalSpeed = 0f;

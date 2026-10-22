@@ -32,6 +32,23 @@ public class HippyJumpTests
 	}
 
 	[Fact]
+	public void TheCrouchsChargeIsKeptThroughTheFlightItGave()
+	{
+		var jump = new HippyJump();
+		for ( var t = 0f; t < HippyJump.FullCrouch / 2f; t += Step )
+			jump.Step( true, Vector3.Zero, true, Gravity, Step );
+		Assert.InRange( jump.Charge, 0.45f, 0.55f );
+		Assert.Equal( HippyJump.Outcome.Launched, jump.Step( false, Vector3.Zero, true, Gravity, Step ) );
+		var charge = jump.Charge;
+		Assert.InRange( charge, 0.45f, 0.55f );
+		var (outcome, _, _) = Fly( jump, _ => Vector3.Zero );
+		Assert.Equal( HippyJump.Outcome.Landed, outcome );
+		Assert.Equal( 0f, jump.Charge );
+		Hold( jump, 2f, Vector3.Zero );
+		Assert.Equal( 1f, jump.Charge );
+	}
+
+	[Fact]
 	public void ALongerCrouchJumpsHigherWithinTheMeasuredRange()
 	{
 		var quick = new HippyJump();

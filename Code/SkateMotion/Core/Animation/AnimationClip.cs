@@ -48,6 +48,11 @@ internal sealed class AnimationClip
 			|| FrameCount != pose.Clip.FrameCount || FramesPerSecond != pose.Clip.FramesPerSecond )
 			throw new ArgumentException( "Raw poses must match the keyed clip's name, timing and skeleton.", nameof( pose ) );
 		RawPose = pose;
+		// A clip goes round only if its source plays it round (a loop, or a cycle whose phase the controller drives): a
+		// one-shot shown past its end, in a state that outlasts it, holds its last pose. Wrapped, a hippy jump's crouch held
+		// longer than its anticipation sprang back up to standing and down again three times a second. The graph's loop
+		// entries, read after, still override it.
+		Looping = pose.Clip.Looping || pose.Clip.PhaseControlled;
 	}
 
 	/// <summary>Maps the graph's requested time to the raw sampler without quantizing it to a frame.</summary>
@@ -77,7 +82,10 @@ internal sealed class AnimationClip
 	internal float FramesPerSecond { get; }
 	internal int FrameCount { get; }
 
-	/// <summary>Whether a caller requesting looping may wrap this clip; false holds its last frame.</summary>
+	/// <summary>
+	/// Whether a caller requesting looping may wrap this clip; false holds its last frame. Bound to raw poses it follows the
+	/// source's playback, which the graph's loop entries override.
+	/// </summary>
 	internal bool Looping { get; set; } = true;
 
 	/// <summary>Copies authored layer weights in skeleton order; ordinary clips use full influence.</summary>
