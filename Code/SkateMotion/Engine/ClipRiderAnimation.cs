@@ -152,13 +152,12 @@ internal sealed class ClipRiderAnimation
 	// back along the deck into each clip's stance: 4-5 in at every wind-up, and 0.6 s after every landing a step of a 0.8
 	// in lift back to the riding stance that read as a slide. A foot landing turns as it came down for LandingPlant
 	// seconds; standing, it turns as the clip turns it (a push's front foot pivoting), easing over StandTurn. Only when
-	// the clip's place has moved further than StandSlack does the foot step to it, over StepTime, lifted by up to StepLift.
-	// Once the clip lifts the foot off its board (a push, a pop, a flip) or the board leaves the ground, the foot eases off
-	// the place it stood over StandRelease rather than jumping to the clip's.
+	// the clip's place has moved far enough (see DeckStance.OutOfStance) does the foot step to it, over StepTime, lifted by
+	// up to StepLift. Once the clip lifts the foot off its board (a push, a pop, a flip) or the board leaves the ground, the
+	// foot eases off the place it stood over StandRelease rather than jumping to the clip's.
 	private const float LandingPlant = 0.6f;
 	private const float StepTime = 0.25f;
 	private const float StepLift = 1.5f;
-	private const float StandSlack = 5f;
 	private const float StandTurn = 10f;
 	private const float StandRelease = 0.12f;
 	private const float PlantStanding = 0.3f;
@@ -179,6 +178,17 @@ internal sealed class ClipRiderAnimation
 	private readonly float[] _sinceAirborne;
 	private readonly bool[] _plantPending;
 	private readonly int[] _framesLanded;
+
+	// Which feet a landing planted, held where they came down for as long as the landing plays (or within PlantWindow,
+	// before the graph is in it), whether or not the clip stands them on its own board: planted only once the clip stood
+	// them, they followed its pull until then, and after a varial kickflip, whose clip keeps its feet off its board for a
+	// fifth of a second, the front foot went 4.4 in along the deck and 3 in back, rising 2 in. A held foot's height
+	// (_landingHeight, inches in the shown deck's frame) is the clip's, rising no quicker than DeckStance.LandingRise.
+	private bool[] _landingHeld;
+	private float[] _landingHeight;
+
+	// How high a stepping foot is lifted over the deck this frame (see Planted), added in OutOfDeck.
+	private float[] _stepLift;
 
 	// Size of an in-air foot correction (inches) that is trusted fully, and where it is ignored; and how fast a
 	// correction follows its target (per second).
@@ -2393,8 +2403,20 @@ internal sealed class ClipRiderAnimation
 		var landing = _sinceAirborne[ index ] <= PlantWindow || _framesLanded[ index ] <= 3;
 		var deck = SkateUnits.ToCore( model.Rotation.Inverse * board.Rotation );
 		var foot = _feet[ index ];
-		if ( airborne || loose || onItsBoard < PlantStanding )
+		// A foot over the deck as the board comes down is planted there at once, and stays planted for as long as the landing
+		// plays, however the clip has it against its own board meanwhile (see _landingHeld).
+		if ( _landingHeld is null || _landingHeld.Length != _feet.Length )
 		{
+			_landingHeld = new bool[ _feet.Length ];
+			_landingHeight = new float[ _feet.Length ];
+			_stepLift = new float[ _feet.Length ];
+		}
+		var comingDown = !airborne && !loose && _plantPending[ index ] && landing && OverDeck( target, model, board, foot );
+		var landed = !airborne && !loose && _landingHeld[ index ] && _plantedAt[ index ] is not null
+			&& (landing || State?.Contains( ".Land." ) == true);
+		if ( airborne || loose || (onItsBoard < PlantStanding && !comingDown && !landed) )
+		{
+			_landingHeld[ index ] = false;
 			LetGoOfStand( index, target, model, board, deck );
 			return EasedOff( index, target, deck, delta );
 		}
@@ -2410,6 +2432,8 @@ internal sealed class ClipRiderAnimation
 			_plantAge[ index ] = 0f;
 			_plantPending[ index ] = false;
 			_stepFrom[ index ] = null;
+			_landingHeld[ index ] = true;
+			_landingHeight[ index ] = wanted.z;
 		}
 		else if ( _plantedAt[ index ] is null && !landing && OverDeck( target, model, board, foot ) )
 		{
@@ -2418,18 +2442,31 @@ internal sealed class ClipRiderAnimation
 			_plantedTurn[ index ] = wantedTurn;
 			_plantAge[ index ] = LandingPlant;
 			_stepFrom[ index ] = null;
+			_landingHeld[ index ] = false;
 		}
 		if ( _plantedAt[ index ] is not { } planted )
 			return EasedOff( index, target, deck, delta );
 		_letGoWeight[ index ] = 0f;
 		_plantAge[ index ] += delta;
+		// Held by the landing, the foot comes down with the clip's but rises no quicker than DeckStance.LandingRise, and until
+		// the clip stands it on its board it turns as the clip turns it (eased as a standing foot turns, see StandTurn).
+		var height = wanted.z;
+		_landingHeld[ index ] = _landingHeld[ index ] && (landing || State?.Contains( ".Land." ) == true);
+		if ( _landingHeld[ index ] )
+		{
+			height = DeckStance.HeldHeight( wanted.z / SkateUnits.InchesPerMetre, _landingHeight[ index ] / SkateUnits.InchesPerMetre,
+				delta ) * SkateUnits.InchesPerMetre;
+			if ( onItsBoard < PlantStanding && _plantedTurn[ index ] is { } coming )
+				_plantedTurn[ index ] = System.Numerics.Quaternion.Slerp( coming, wantedTurn, 1f - MathF.Exp( -StandTurn * delta ) );
+		}
+		_landingHeight[ index ] = height;
 		var turn = _plantedTurn[ index ] ?? wantedTurn;
 		var lift = 0f;
 		if ( _plantAge[ index ] > LandingPlant )
 		{
 			turn = System.Numerics.Quaternion.Slerp( turn, wantedTurn, 1f - MathF.Exp( -StandTurn * delta ) );
 			_plantedTurn[ index ] = turn;
-			if ( _stepFrom[ index ] is null && (wanted - planted).Length > StandSlack )
+			if ( _stepFrom[ index ] is null && DeckStance.OutOfStance( SkateUnits.Metres( wanted - planted ) ) )
 			{
 				_stepFrom[ index ] = planted;
 				_stepTurnFrom[ index ] = turn;
@@ -2455,8 +2492,12 @@ internal sealed class ClipRiderAnimation
 		// The plant holds the foot's place along the deck, never its height: the height stays where the fit stands the foot
 		// on the deck (lifted only as it steps). Held whole, a foot planted while it was still coming down onto the deck (riding
 		// on, back on after a push) hovered there, 0.9 in over the deck standing and 1.9 in after a push, until it next stepped.
-		planted = planted.WithZ( wanted.z + lift );
-		_shownStand[ index ] = planted;
+		// The step's lift is added over the deck (see OutOfDeck), not to the clip's height: the clips stand their ankles up
+		// to 1.9 in under the deck's top, which the push out of the deck makes up, and lifted from there the step back to
+		// the riding stance after a varial kickflip never rose off the deck, a 4.5 in slide.
+		planted = planted.WithZ( height );
+		_stepLift[ index ] = lift;
+		_shownStand[ index ] = planted.WithZ( height + lift );
 		_shownStandTurn[ index ] = turn;
 		// The foot keeps its turn against the deck: it and the bones below it turn about the ankle onto it.
 		TurnFoot( index, System.Numerics.Quaternion.Normalize( deck * turn * System.Numerics.Quaternion.Conjugate( _rotations[ foot.Ankle ] ) ) );
@@ -2484,6 +2525,7 @@ internal sealed class ClipRiderAnimation
 		_plantedAt[ index ] = null;
 		_plantedTurn[ index ] = null;
 		_stepFrom[ index ] = null;
+		_stepLift[ index ] = 0f;
 	}
 
 	// The clip's place for a foot, eased in from where it let go of the deck.
@@ -3315,10 +3357,17 @@ internal sealed class ClipRiderAnimation
 			push = current + MountRise * delta;
 		_rising[ index ] = limited && push < needed - 0.01f;
 		_deckPush[ index ] = push;
-		if ( MathF.Abs( push ) < 0.01f )
+		// A stepping foot is lifted over where the deck holds it (see Planted).
+		var lift = 0f;
+		if ( _stepLift is not null && index < _stepLift.Length && !onRail )
+		{
+			lift = float.IsFinite( _stepLift[ index ] ) ? _stepLift[ index ] : 0f;
+			_stepLift[ index ] = 0f;
+		}
+		if ( MathF.Abs( push + lift ) < 0.01f )
 			return;
 		var normal = SkateUnits.ToCore( model.Rotation.Inverse * board.Rotation.Up );
-		var pushed = _positions[ foot.Ankle ] + normal * push;
+		var pushed = _positions[ foot.Ankle ] + normal * (push + lift);
 		var pushReach = MathF.Max( _railWeight, _airWeight );
 		if ( pushReach > 0f )
 			pushed = System.Numerics.Vector3.Lerp( pushed, KeepReach( foot, _positions[ foot.Ankle ], pushed, onRail ? DeckUp( model, board ) : default ), pushReach );

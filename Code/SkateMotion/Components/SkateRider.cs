@@ -357,9 +357,20 @@ public sealed class SkateRider : Component
 		// clip's own moment, where its board is under its feet), or at the latest when the mount has run its time.
 		var onBoard = _animator.ClipState?.StartsWith( "OnBoard" ) == true;
 		var down = _interaction.MountsInAir ? _interaction.MountDue : _interaction.MountDue || onBoard;
-		if ( !down || !_interaction.PlaceAndMount( pose, rideHeight ) ) return;
+		if ( !down )
+			return;
+		// The hand's pose is where the board was drawn the frame before. Carried on with the rider since, it is where the
+		// hand has it now, and the body is drawn a step behind where the rider is: the board goes down that far on from it,
+		// so it stays where it is drawn about the body, and it is shown from the hand's pose easing onto how it lies. Put
+		// down at the pose itself it stood still for a frame and caught up (1-5 in back as the rider got on at a walk or a
+		// run), and it dropped from the hand's height to its own (0.6-1.6 in) and turned flat (3-15 degrees) in a frame.
+		var shown = pose.WithPosition( pose.Position + _motor.Velocity.WithZ( 0f ) * Time.Delta );
+		var lag = (WorldPosition - ShownTransform.Position).WithZ( 0f );
+		if ( !_interaction.PlaceAndMount( shown.WithPosition( shown.Position + lag ), rideHeight ) ) return;
+		// Never shown sinking into the ground it went down on (a long frame carries the hand's board on below it).
+		shown = shown.WithPosition( shown.Position.WithZ( MathF.Max( shown.Position.z, Board.WorldPosition.z ) ) );
 		Board.Enabled = true;
-		Board.ShowPutDown( _animator.Smoother );
+		Board.ShowPutDown( _animator.Smoother, shown );
 		Board.SetRiderAttached( true );
 	}
 
