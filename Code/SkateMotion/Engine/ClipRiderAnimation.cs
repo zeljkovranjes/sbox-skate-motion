@@ -505,6 +505,11 @@ internal sealed class ClipRiderAnimation
 	// Seconds a hand plant takes to turn the rider upside down on the lip, and to let go.
 	private const float PlantEase = 0.2f;
 
+	// The turn (in the world, against the deck) that stands a hand plant's model upright, kept from the last frame the hand
+	// planted while the plant eases out (see Update).
+	private Rotation _plantTurn = Rotation.Identity;
+	private bool _plantTurnHeld;
+
 	// The deck's turn tipped grip side down by the shortest way. The plant clips hold the planting hand above the deck
 	// along its grip side, so this hangs the rider upside down under the board, the hand toward the lip below.
 	private static Rotation Inverted( Rotation deck )
@@ -864,8 +869,20 @@ internal sealed class ClipRiderAnimation
 			_plantHand = Rig[ "left_hand" ] < 0 || Rig[ "right_hand" ] < 0 ? -1
 				: _positions[ Rig[ "left_hand" ] ].Z <= _positions[ Rig[ "right_hand" ] ].Z ? Rig[ "left_hand" ] : Rig[ "right_hand" ];
 		_plantWeight = Math.Clamp( _plantWeight + (planting ? delta : -delta) / PlantEase, 0f, 1f );
+		// While the hand plants the model turns toward the deck turned over; as it lets go it eases back along the turn
+		// that had as the hand left the lip, kept against the deck. Turned toward the deck turned over each frame instead,
+		// the turn swung round as the deck came level leaving the lip (the shortest way from its up to down is any way at
+		// level): the model's heading went through 41 degrees in one frame and the planting hand's fingers 4.3 on the snap
+		// meter as the plant let go.
+		if ( planting || !_plantTurnHeld )
+		{
+			_plantTurn = Inverted( root.Rotation ) * root.Rotation.Inverse;
+			_plantTurnHeld = planting;
+		}
 		if ( _plantWeight > 0f )
-			frame = Rotation.Slerp( frame, Inverted( root.Rotation ), Smoothstep( _plantWeight ) );
+			frame = Rotation.Slerp( frame, _plantTurn * root.Rotation, Smoothstep( _plantWeight ) );
+		else
+			_plantTurnHeld = false;
 		// Getting on or off, the body is placed from the deck instead of the rider's own position (or back), and on foot it
 		// can be stepped up or down at once: either way it carries on from where it was shown and settles. Getting on it
 		// keeps its height (the clip stands on the ground the board stands on) while the rider is moved onto the deck.
@@ -975,6 +992,7 @@ internal sealed class ClipRiderAnimation
 		{
 			_settle = 0f;
 			_flipDrop = 0f;
+			_flipDropRate = 0f;
 			LetGoOfDeck();
 			// Getting on, the feet are kept out of the deck as they step onto it, so riding does not start by pushing them
 			// out in one frame; off the board a push left from riding eases out instead of the leg dropping in one frame.
@@ -2787,15 +2805,21 @@ internal sealed class ClipRiderAnimation
 	// by as much of that as the deck is rolling, against the body, past FlipRoll (fully past FlipRolling). The sweep does
 	// not turn with the deck, so what it asks changes smoothly however fast the deck spins: it comes in as the flick spins
 	// the board up and goes as the catch stops it. The board takes most of it, dropping away under the feet (see
-	// DropForFlip) as a flipped board does, and the feet lift the rest, each at no more than SweepRise; both come back
-	// at the deck's push release as the catch stops the roll. Pushed along the deck's up axis alone, the push went from one
-	// face's to the other's through nothing as the deck turned past edge on, and a foot stood 1.4 in in the deck for four
-	// frames at a kickflip's catch; lifted over the nearer edge instead the way out was up to 4.6 in and the shin jumped
-	// in a frame, and lifted out of the sweep by the feet alone, at 200 in/s, the legs were thrown 3.6 in in three frames.
-	private float[] _edgeLift;
+	// DropForFlip) as a flipped board does, and the feet lift the rest; both come back as the catch stops the roll. Pushed
+	// along the deck's up axis alone, the push went from one face's to the other's through nothing as the deck turned past
+	// edge on, and a foot stood 1.4 in in the deck for four frames at a kickflip's catch; lifted over the nearer edge
+	// instead the way out was up to 4.6 in and the shin jumped in a frame, and lifted out of the sweep by the feet alone,
+	// at 200 in/s, the legs were thrown 3.6 in in three frames.
+	// The lift and the drop follow what the sweep asks as critically damped springs (SweepSpring a second). What it asks
+	// moves from frame to frame (how fast the deck rolls is read from one frame to the next, and which point of the sole is
+	// deepest changes), and followed at a set speed (80 in/s) the lift set off and stopped at full speed in a frame and
+	// turned with each frame's ask: the back foot's ball jumped 1.1 to 3.9 on the snap meter as a heelflip left the
+	// ground, more or less with the frame's timing against the flick.
+	private System.Numerics.Vector3[] _sweepLift;
+	private System.Numerics.Vector3[] _sweepLiftRate;
 	private const float FlipRoll = 3.5f;
 	private const float FlipRolling = 10f;
-	private const float SweepRise = 80f;
+	private const float SweepSpring = 40f;
 	private const float DropShare = 0.6f;
 	private const float DropLimit = 3f;
 
@@ -2805,6 +2829,7 @@ internal sealed class ClipRiderAnimation
 
 	// How far down (inches, the body's down) the shown board has dropped away from the feet for its flip.
 	private float _flipDrop;
+	private float _flipDropRate;
 
 	// How far into the sweep a foot is (inches, scaled by how fully the deck is rolling) and the way out of it (the shown
 	// deck's frame); nothing outside it or with the deck not rolling.
@@ -2845,7 +2870,7 @@ internal sealed class ClipRiderAnimation
 
 	// The shown board drops away from the feet as it flips, by DropShare of the deepest foot's way out of its sweep (no
 	// more than DropLimit), along the body's down: a flipped board turns over below the feet and rises to meet them at
-	// the catch. It drops no faster than SweepRise and comes back at the deck's push release.
+	// the catch. It drops and comes back as a spring following that (see SweepSpring).
 	private Transform DropForFlip( Transform model, Transform board, float delta, bool flying )
 	{
 		var wanted = 0f;
@@ -2855,10 +2880,9 @@ internal sealed class ClipRiderAnimation
 				wanted = MathF.Max( wanted, SweepNeed( foot, model, board, delta ).Need );
 		}
 		wanted = MathF.Min( wanted * DropShare, DropLimit );
-		_flipDrop = wanted >= _flipDrop ? MathF.Min( wanted, _flipDrop + SweepRise * delta )
-			: MathX.Lerp( _flipDrop, wanted, 1f - MathF.Exp( -DeckPushRelease * delta ) );
-		if ( _flipDrop < 0.01f )
-			_flipDrop = 0f;
+		Spring( ref _flipDrop, ref _flipDropRate, wanted, SweepSpring, delta );
+		if ( _flipDrop < 0.01f && wanted <= 0f && MathF.Abs( _flipDropRate ) < 0.1f )
+			_flipDrop = _flipDropRate = 0f;
 		if ( _flipDrop == 0f || _boardShown <= 0f )
 			return board;
 		// The shown pose blends physics and animation by the shown weight, so the animated pose carries the drop, with the
@@ -2873,26 +2897,48 @@ internal sealed class ClipRiderAnimation
 	{
 		var foot = _feet[ index ];
 		var (needed, away) = flying ? SweepNeed( foot, model, board, delta ) : (0f, Vector3.Zero);
-		if ( _edgeLift is null || _edgeLift.Length != _feet.Length )
-			_edgeLift = new float[ _feet.Length ];
-		if ( _edgeAway is null || _edgeAway.Length != _feet.Length )
-			_edgeAway = new Vector3[ _feet.Length ];
-		var current = _edgeLift[ index ];
-		current = needed >= current ? MathF.Min( needed, current + SweepRise * delta )
-			: MathX.Lerp( current, needed, 1f - MathF.Exp( -DeckPushRelease * delta ) );
-		if ( current < 0.01f )
-			current = 0f;
-		_edgeLift[ index ] = current;
-		if ( needed > 0f )
-			_edgeAway[ index ] = away;
-		if ( current == 0f )
+		// Made here (not only where the rest are): a hot reload adds them to a rider already running.
+		if ( _sweepLift is null || _sweepLift.Length != _feet.Length )
+			_sweepLift = new System.Numerics.Vector3[ _feet.Length ];
+		if ( _sweepLiftRate is null || _sweepLiftRate.Length != _feet.Length )
+			_sweepLiftRate = new System.Numerics.Vector3[ _feet.Length ];
+		// The way out in the model's frame, as far as the sweep asks.
+		var wanted = needed > 0f ? SkateUnits.ToCore( model.Rotation.Inverse * (board.Rotation * away) ) * needed
+			: System.Numerics.Vector3.Zero;
+		Spring( ref _sweepLift[ index ], ref _sweepLiftRate[ index ], wanted, SweepSpring, delta );
+		var lift = _sweepLift[ index ];
+		if ( needed <= 0f && lift.Length() < 0.01f && _sweepLiftRate[ index ].Length() < 0.1f )
+		{
+			_sweepLift[ index ] = _sweepLiftRate[ index ] = System.Numerics.Vector3.Zero;
 			return;
-		var lift = SkateUnits.ToCore( model.Rotation.Inverse * (board.Rotation * _edgeAway[ index ]) ) * current;
+		}
 		foot.Leg.Solve( _positions, _rotations, _positions[ foot.Ankle ] + lift, _kneeHint[ index ] );
 	}
 
-	// The way (the shown deck's frame) each foot is lifted out of the sweep.
-	private Vector3[] _edgeAway;
+	// Moves a value toward a target as a critically damped spring of the given rate, exactly over the step: its speed
+	// starts and ends at nothing and never steps, however the target jumps.
+	private static void Spring( ref float value, ref float rate, float target, float spring, float delta )
+	{
+		if ( !(delta > 0f) )
+			return;
+		var offset = value - target;
+		var push = rate + spring * offset;
+		var fade = MathF.Exp( -spring * delta );
+		value = target + (offset + push * delta) * fade;
+		rate = (rate - push * spring * delta) * fade;
+	}
+
+	private static void Spring( ref System.Numerics.Vector3 value, ref System.Numerics.Vector3 rate,
+		System.Numerics.Vector3 target, float spring, float delta )
+	{
+		if ( !(delta > 0f) )
+			return;
+		var offset = value - target;
+		var push = rate + spring * offset;
+		var fade = MathF.Exp( -spring * delta );
+		value = target + (offset + push * delta) * fade;
+		rate = (rate - push * spring * delta) * fade;
+	}
 
 	// A foot correction on a rail or in the air never straightens the leg: past SoftReach of the leg's length the target
 	// is drawn in, toward the full length but never reaching it, so a rider whose legs are shorter than the clip skater's,
