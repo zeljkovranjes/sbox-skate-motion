@@ -179,6 +179,10 @@ internal sealed class PoseRetargeter
 		return mirror ? new Vector3( offset.X, -offset.Y, offset.Z ) : offset;
 	}
 
+	/// <summary>A source bone's height over the ground in the source's rest pose, in target units; 0 for no bone.</summary>
+	internal float SourceRestHeight( int sourceBone ) =>
+		sourceBone >= 0 && sourceBone < _restPositions.Length ? _restPositions[ sourceBone ].Z * _scale : 0f;
+
 	/// <summary>Source ground height in the source root frame for the last applied pose (the root sits above it).</summary>
 	internal float SourceGround { get; private set; }
 

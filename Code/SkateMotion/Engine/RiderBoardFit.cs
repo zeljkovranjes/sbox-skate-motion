@@ -88,6 +88,9 @@ internal sealed class RiderBoardFit
 		return share * share * (3f - 2f * share);
 	}
 
+	/// <summary>How high the clips' deck top is over its middle (model units).</summary>
+	internal float ClipsTop => _scaledClips.Thickness * 0.5f;
+
 	/// <summary>How near a point is to the clips' deck: 1 on it, easing to 0 at <see cref="BoardFit.Reach"/> off it.</summary>
 	internal float Nearness( NumericsVector point )
 	{

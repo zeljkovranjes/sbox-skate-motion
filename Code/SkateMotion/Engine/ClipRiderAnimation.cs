@@ -406,6 +406,14 @@ internal sealed class ClipRiderAnimation
 	private const float PressMost = 6f;
 	private const float PressLift = 0.25f;
 	private const float PressLiftFade = 0.35f;
+
+	// Riding on the ground a foot the clip stands on its board is laid flat on the deck under it (turned by at most FlatMost
+	// radians) and pressed onto it (see OutOfDeck), fully while the clip holds its toe no more than GroundPressLift (inches)
+	// over its standing height, fading out over GroundPressFade more.
+	private readonly float[] _groundStand = new float[ 2 ];
+	private const float GroundPressLift = 0.5f;
+	private const float GroundPressFade = 0.5f;
+	private const float FlatMost = 0.35f;
 	private readonly float?[] _clipStand = new float?[ 2 ];
 	private readonly float[] _clipLift = new float[ 2 ];
 
@@ -2017,12 +2025,24 @@ internal sealed class ClipRiderAnimation
 		// The clips' toes on their board, moved onto the same place on the board ridden: over its trucks, on its deck.
 		var clipToe = _retargeter.SourceRelative( toeSource, _anchor, mirror );
 		ClipToeHeights[ Math.Min( index, ClipToeHeights.Length - 1 ) ] = clipToe.Z;
+		// Over its board the clips' toe is as high as their skater stands it, and the rider's ball stands at its own height:
+		// the toe is taken down (or up) by the difference between the two standing heights. Kept as the clips have it, every
+		// foot stood on the deck at the clip skater's height, and the default rider (ball 0.36 in over its sole, the clip's
+		// toe 1.21 in) floated 0.9-1.1 in over the deck. A foot down beside the board or under it is left as it is.
+		var raise = _retargeter.SourceRestHeight( toeSource ) - foot.BallHeight;
+		if ( clipToe.Z > 0f && float.IsFinite( raise ) )
+			clipToe.Z = MathF.Max( clipToe.Z - raise * _fit.Nearness( clipToe with { Z = 0f } ), 0f );
 		// Where the clip stands this foot on its board in this grind (the lowest it has held it since getting on), and how
 		// far over that it holds it now: a foot lifted to step or for a willy is not pressed onto the deck.
 		var liftSlot = Math.Min( index, _clipLift.Length - 1 );
 		var clipHeight = MathF.Abs( clipToe.Z );
 		_clipStand[ liftSlot ] = !onRail ? null : _clipStand[ liftSlot ] is { } lowest ? MathF.Min( lowest, clipHeight ) : clipHeight;
 		_clipLift[ liftSlot ] = clipHeight - (_clipStand[ liftSlot ] ?? clipHeight);
+		// How fully the clip stands this foot on its board (see OutOfDeck): fully while it holds the toe over its deck no
+		// more than GroundPressLift over where its skater stands, fading out over GroundPressFade more; a foot it lifts (a
+		// wind-up, a step) is left where it is.
+		_groundStand[ liftSlot ] = _fit.Nearness( clipToe with { Z = 0f } )
+			* (1f - Smoothstep( (clipToe.Z - _fit.ClipsTop - foot.BallHeight - GroundPressLift) / GroundPressFade ));
 		var onBoard = _fit.Foot( clipToe, _shownSwitch );
 		var toeWorld = board.PointToWorld( SwitchTurn * SkateUnits.ToEngine( onBoard ) );
 		var toeModel = SkateUnits.ToCore( model.PointToLocal( toeWorld ) );
@@ -2196,6 +2216,7 @@ internal sealed class ClipRiderAnimation
 		_letGoWeight[ index ] = 0f;
 		_plantAge[ index ] += delta;
 		var turn = _plantedTurn[ index ] ?? wantedTurn;
+		var lift = 0f;
 		if ( _plantAge[ index ] > LandingPlant )
 		{
 			turn = System.Numerics.Quaternion.Slerp( turn, wantedTurn, 1f - MathF.Exp( -StandTurn * delta ) );
@@ -2211,7 +2232,8 @@ internal sealed class ClipRiderAnimation
 				_stepProgress[ index ] = MathF.Min( 1f, _stepProgress[ index ] + delta / StepTime );
 				var progress = _stepProgress[ index ];
 				var eased = progress * progress * (3f - 2f * progress);
-				planted = Vector3.Lerp( from, wanted, eased ) + Vector3.Up * (StepLift * MathF.Sin( MathF.PI * progress ));
+				planted = Vector3.Lerp( from, wanted, eased );
+				lift = StepLift * MathF.Sin( MathF.PI * progress );
 				turn = System.Numerics.Quaternion.Slerp( _stepTurnFrom[ index ], wantedTurn, eased );
 				if ( progress >= 1f )
 				{
@@ -2222,6 +2244,10 @@ internal sealed class ClipRiderAnimation
 				}
 			}
 		}
+		// The plant holds the foot's place along the deck, never its height: the height stays where the fit stands the foot
+		// on the deck (lifted only as it steps). Held whole, a foot planted while it was still coming down onto the deck (riding
+		// on, back on after a push) hovered there, 0.9 in over the deck standing and 1.9 in after a push, until it next stepped.
+		planted = planted.WithZ( wanted.z + lift );
 		_shownStand[ index ] = planted;
 		_shownStandTurn[ index ] = turn;
 		// The foot keeps its turn against the deck: it and the bones below it turn about the ankle onto it.
@@ -2794,6 +2820,36 @@ internal sealed class ClipRiderAnimation
 	// wheels): positive lifts a foot on top, negative lowers one underneath.
 	// With press (on a rail), a foot clear of the deck on its side gives how far it is off it instead of nothing: the push
 	// toward the deck, negative for a foot over the top, positive for one under a board held dark side up.
+	// Lays a foot on the deck under it by the given share: turned about its ankle, toes down or up along the foot, until
+	// its ankle and ball stand as high over the deck under each as they stand over the floor flat (by at most FlatMost).
+	private void LayFlat( int index, Transform model, Transform board, float share )
+	{
+		var foot = _feet[ index ];
+		var ankle = _positions[ foot.Ankle ];
+		var normal = SkateUnits.ToCore( model.Rotation.Inverse * board.Rotation.Up );
+		var along = _positions[ foot.Ball ] - ankle;
+		along -= normal * System.Numerics.Vector3.Dot( along, normal );
+		if ( along.LengthSquared() < 1e-6f )
+			return;
+		var reach = along.Length();
+		along /= reach;
+		// The ankle and the ball over the deck under each, less their heights over the floor standing flat (the shoe's own
+		// sole points will not do: its toe curves up off the floor standing flat).
+		float? Gap( System.Numerics.Vector3 position, float standing )
+		{
+			var local = board.PointToLocal( model.PointToWorld( SkateUnits.ToEngine( position ) ) );
+			return _skateboard.DeckSurface( local.x, local.y ) is { } surface ? local.z - surface.Top - standing : null;
+		}
+		if ( reach < 1f || Gap( ankle, foot.AnkleHeight ) is not { } heel || Gap( _positions[ foot.Ball ], foot.BallHeight ) is not { } toes )
+			return;
+		// Turning by an angle (toes down) lowers the ball by its distance ahead of the ankle times the angle.
+		var angle = Math.Clamp( (toes - heel) / reach, -FlatMost, FlatMost ) * share;
+		if ( MathF.Abs( angle ) < 1e-4f )
+			return;
+		var axis = System.Numerics.Vector3.Normalize( System.Numerics.Vector3.Cross( normal, along ) );
+		TurnFoot( index, System.Numerics.Quaternion.CreateFromAxisAngle( axis, angle ) );
+	}
+
 	private float RequiredPush( (TwoBoneIk Leg, int Ankle, int Ball, float AnkleHeight, float BallHeight, System.Numerics.Vector3[] Sole, float ShinRadius) foot,
 		Transform model, Transform board, bool onRail = false, bool airborne = false, bool press = false )
 	{
@@ -2815,7 +2871,7 @@ internal sealed class ClipRiderAnimation
 			// In the air over the physical board (leaving a rail) the hips decide too: the ankle flips a foot's side as an
 			// air clip swings it across the deck.
 			return SolePush( foot, model, board, onRail || airborne || Dark ? HipAbove( foot, model, board ) : Above( foot, model, board ),
-				MathF.Max( _railWeight, Dark ? 1f : 0f ), press && onRail );
+				MathF.Max( _railWeight, Dark ? 1f : 0f ), press );
 		}
 		var top = SolePush( foot, model, board, true );
 		var under = SolePush( foot, model, board, false );
@@ -2960,6 +3016,27 @@ internal sealed class ClipRiderAnimation
 		var side = HipAbove( foot, model, board ) ? 1f : -1f;
 		var pressing = false;
 		var standing = 0f;
+		// On the ground too, a foot the clip stands on its board is laid on the deck and pressed onto it: the clip's target
+		// keeps its height over its own deck's middle and its turn against its own deck, so over a tail kicked unlike the
+		// clips' board the back foot stood on its heel with its toes 0.6 in up. Not while it steps (see Planted).
+		if ( !onRail && !airborne && _skateboard is not null && FootIndex( foot ) is var grounded and >= 0
+			&& _stepFrom[ grounded ] is null && side > 0f )
+		{
+			var share = _groundStand[ Math.Min( grounded, _groundStand.Length - 1 ) ] * _footWeight[ grounded ];
+			if ( share > 0f )
+			{
+				LayFlat( index, model, board, share );
+				needed = RequiredPush( foot, model, board, onRail, airborne );
+				if ( !float.IsFinite( needed ) )
+					needed = 0f;
+				var pressed = RequiredPush( foot, model, board, onRail, airborne, press: true );
+				if ( float.IsFinite( pressed ) && pressed < 0f && needed <= 0f )
+				{
+					needed = -MathF.Min( -pressed, PressMost ) * share;
+					pressing = true;
+				}
+			}
+		}
 		if ( onRail && _skateboard is not null && FootIndex( foot ) is var stood and >= 0 )
 		{
 			standing = 1f - Smoothstep( (_clipLift[ Math.Min( stood, _clipLift.Length - 1 ) ] - PressLift) / PressLiftFade );
