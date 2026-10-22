@@ -125,21 +125,34 @@ internal sealed class BoardVisuals
 		}
 	}
 
+	// How far past the room its wheels leave it (BoardRig.LeanLimit) a deck may lean, as a share of that room: it rises
+	// off the wheels as it goes (Rise), as if on risers.
+	private const float TiltPastRoom = 1.6f;
+
 	/// <summary>
-	/// How far the deck dips into the current turn (radians, positive: its left side down): never further than the board's
-	/// own trucks and wheels leave it room to (BoardRig.LeanLimit), easing into that limit rather than stopping at it.
+	/// How far the deck dips into the current turn (radians, positive: its left side down): on a board whose wheels sit
+	/// close under the deck, no further than <see cref="TiltPastRoom"/> times the room they leave it, easing into that
+	/// limit rather than stopping at it.
 	/// </summary>
 	internal float Roll
 	{
 		get
 		{
 			var roll = _lean.Roll;
-			var limit = _rig.LeanLimit;
+			var limit = _rig.LeanLimit * TiltPastRoom;
 			return limit >= DeckLean.MaximumRoll ? roll : limit > 0f ? limit * MathF.Tanh( roll / limit ) : 0f;
 		}
 	}
 
-	/// <summary>A deck pose dipped by the deck's lean, about the line through the trucks' pivots under it.</summary>
+	// How far (inches) the deck rises off its wheels at a lean past the room they leave it: enough that its underside
+	// clears the farthest of them under it.
+	private float Rise( float roll ) => _rig.LeanLimit is var limit && float.IsFinite( limit )
+		? MathF.Max( 0f, MathF.Abs( roll ) - limit ) * _rig.WheelReach : 0f;
+
+	/// <summary>
+	/// A deck pose dipped by the deck's lean, about the line through the trucks' pivots under it, and risen off its wheels
+	/// as far as a lean past their room needs.
+	/// </summary>
 	internal Transform Leaned( Transform deck )
 	{
 		var roll = Roll;
@@ -147,7 +160,7 @@ internal sealed class BoardVisuals
 			return deck;
 		var turn = Rotation.FromAxis( Vector3.Forward, -roll * (180f / MathF.PI) );
 		var pivot = Vector3.Down * _rig.PivotDepth;
-		return deck.ToWorld( new Transform( pivot - turn * pivot, turn ) );
+		return deck.ToWorld( new Transform( pivot - turn * pivot + Vector3.Up * Rise( roll ), turn ) );
 	}
 
 	// A wheel's spin about its own axle (the board's left in its rest frame).

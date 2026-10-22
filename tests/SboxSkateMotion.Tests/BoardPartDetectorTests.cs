@@ -39,6 +39,8 @@ public class BoardPartDetectorTests
 		Assert.NotNull( layout );
 		Assert.InRange( layout.WheelRoom, 0.0055f, 0.0075f );
 		Assert.InRange( layout.LeanLimit, 0.07f, 0.085f );
+		// Only their inner faces lie under the deck: the farthest point a deck leaning further must rise to clear.
+		Assert.InRange( layout.WheelReach, 0.08f, 0.09f );
 		Assert.True( layout.BoltedTrucks[ 0 ] && layout.BoltedTrucks[ 1 ] );
 	}
 

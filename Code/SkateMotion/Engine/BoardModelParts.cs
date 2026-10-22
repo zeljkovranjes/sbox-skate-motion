@@ -21,7 +21,7 @@ internal sealed class BoardModelParts
 	// What the cached readings were found by. A code reload keeps static state, so models read by an earlier detector
 	// kept its layout (one without the hanger and wheel gap measured): raise Detection whenever the detector changes
 	// what it measures, and the cache is read again.
-	private const int Detection = 11;
+	private const int Detection = 12;
 	private static int _cachedDetection;
 
 	// A board shorter or longer than this (metres) was authored in other units: it is shown at a usual deck's length.

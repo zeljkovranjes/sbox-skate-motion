@@ -56,6 +56,13 @@ internal sealed class BoardLayout
 	/// </summary>
 	internal float WheelRoom { get; init; } = float.PositiveInfinity;
 
+	/// <summary>
+	/// How far (metres) from the deck's long middle the farthest wheel or free hanger point under the deck lies: a deck
+	/// leaning past <see cref="LeanLimit"/> by an angle must rise by about that angle times this to clear them; 0 when
+	/// none lies under the deck.
+	/// </summary>
+	internal float WheelReach { get; init; }
+
 	/// <summary>The deck's length, nose to tail.</summary>
 	internal float Length { get; init; }
 
