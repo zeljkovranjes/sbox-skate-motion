@@ -32,6 +32,11 @@ internal sealed class BoardPartDetector
 	// Share of a piece's triangles on a wheel's tyre that makes it hold that wheel as well as whatever else it holds.
 	private const float TyreShare = 0.08f;
 
+	// Where along its centre line the deck is measured when something hangs under its middle: shares of the half length
+	// from the middle, either side.
+	private static readonly float[] ClearOfMiddle = { 0.15f, 0.25f, 0.35f };
+	private static readonly float[] Sides = { -1f, 1f };
+
 	private readonly BoardMesh _mesh;
 	private readonly Vector3[] _points;
 	private readonly int[] _triangles;
@@ -134,6 +139,10 @@ internal sealed class BoardPartDetector
 		}
 		if ( _deckTop < _deckBottom )
 			(_deckTop, _deckBottom) = (MaxZ( section ), MinZ( section ));
+		// Something hung under the deck's middle (a case, a tank) leaves no room there: the deck is then measured along
+		// its centre line toward the axles, where the most room is left under it.
+		if ( Gap < _width * 0.1f )
+			MeasureClearOfMiddle( length );
 		if ( Gap < _width * 0.1f )
 		{
 			problem = "has nothing standing under its deck";
@@ -141,6 +150,23 @@ internal sealed class BoardPartDetector
 		}
 		problem = null;
 		return true;
+	}
+
+	// The deck's top and underside where the most room is left under it along its centre line, either side of its
+	// middle (shares of the half length from the middle, all short of the axles).
+	private void MeasureClearOfMiddle( float length )
+	{
+		foreach ( var share in ClearOfMiddle )
+		{
+			foreach ( var side in Sides )
+			{
+				var heights = MeshSection.Down( _points, _triangles, _centreX + side * share * length * 0.5f, _centreY );
+				if ( heights.Count < 2 || heights.Min() <= _deckBottom )
+					continue;
+				_deckTop = heights.Max();
+				_deckBottom = heights.Min();
+			}
+		}
 	}
 
 	// The wheels' treads are the lowest points of the four corners; the piece (or cluster) holding each is its wheel.

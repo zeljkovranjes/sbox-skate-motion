@@ -31,7 +31,8 @@ internal static class RiderOutfit
 			dresser.ApplyHeightScale = false;
 			dresser.UpdateAppearance( outfit );
 			dresser.Apply( outfit );
-			foreach ( var piece in body.GameObject.Children.Where( child => !before.Contains( child ) ) )
+			var made = body.GameObject.Children.Where( child => !before.Contains( child ) ).ToList();
+			foreach ( var piece in made )
 			{
 				piece.NetworkMode = NetworkMode.Never;
 				piece.Flags |= GameObjectFlags.NotSaved;
@@ -39,11 +40,14 @@ internal static class RiderOutfit
 			}
 			// What the body wears is then what the player's body wears now, piece for piece (a game may have changed it
 			// since its dresser dressed it from the avatar): pieces it does not wear come off, those it wears on top are
-			// copied, and its body groups (the parts its clothes hide) follow.
+			// copied, and its body groups (the parts its clothes hide) follow. Only the pieces just made are matched (any
+			// from before are on their way out), and their renderers are found whether on or not: the rider's model is
+			// hidden until it is first posed, and an enabled-only search found none, so every piece was copied as well,
+			// each copy carrying the skin the player's piece had then over the dresser's own (the legs drawn brown).
 			var missing = Clothing( own ).ToList();
-			foreach ( var piece in body.GameObject.Children.ToList() )
+			foreach ( var piece in made )
 			{
-				var renderer = piece.Components.Get<SkinnedModelRenderer>();
+				var renderer = piece.Components.Get<SkinnedModelRenderer>( FindMode.EverythingInSelf );
 				if ( renderer is null || renderer.BoneMergeTarget != body )
 					continue;
 				var match = missing.FirstOrDefault( clothing => clothing.Model == renderer.Model );
