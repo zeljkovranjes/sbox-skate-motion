@@ -41,6 +41,7 @@ Animation files are looked for among the mounted files (the package's own, or a 
 Landing hand-back - landing, the shown board goes over to the physical one from where it was shown, carried on as it was moving and slowing, over a time long enough that it turns no faster than 6 rad/s. A board turned 72-80 degrees under the feet in the air (a board adjust held through the landing) swung back in 0.15 s at 630-810 degrees a second; it now takes about 0.33 s at 340-360
 Flip sweep - in the air a deck rolling over (a kickflip, a heelflip) drops away from the feet (up to 3 in, along the body's down) and the feet lift out of the cylinder it sweeps, each at no more than 80 in/s, coming back as the catch stops the roll
 # Input
+Riding keys a game can map - SkateRider rides on LocalSkateInput.RidingMove, and LocalSkateInput.Pad takes airborne, so a game can read its own riding keys and air buttons (the Sandbox addon maps every control to rebindable keys this way)
 One trick at a time - a trick plays to its end before the next can start: on the ground, from a trick's pop to the end of its landing (the rider's OnBoard.Trick and OnBoard.Land states), SkateRider lets the trick stick go, from the keys, the mouse and a controller alike, so a pop pressed during a landing no longer cuts its animation short. In the air the stick stays free, for grabs, late flips and a flip held on. LocalSkateInput.ReadKeys takes ready: while it is false the mouse stick lets go
 ### Fixed
 # Board

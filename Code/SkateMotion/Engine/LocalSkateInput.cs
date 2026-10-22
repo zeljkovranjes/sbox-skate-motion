@@ -57,10 +57,17 @@ internal sealed class LocalSkateInput
 	}
 
 	/// <summary>
-	/// A controller read without a controller profile: the sticks steer and flick, and its own presses of the skate
-	/// actions push, brake, slide and pump. pad is a settled reading.
+	/// The keyboard's movement on the board: the movement keys as they are (a game may read its riding keys some other
+	/// way, as the Sandbox addon reads its own bindings).
 	/// </summary>
-	internal static SkateInput Pad( ControllerReading pad, bool goofy )
+	internal static Vector3 RidingMove( Vector3 move ) => move;
+
+	/// <summary>
+	/// A controller read without a controller profile: the sticks steer and flick, and its own presses of the skate
+	/// actions push, brake, slide and pump. pad is a settled reading. Whether the board is in the air
+	/// (<paramref name="airborne"/>) changes nothing here: the skate actions are the same on the ground and in the air.
+	/// </summary>
+	internal static SkateInput Pad( ControllerReading pad, bool goofy, bool airborne = false )
 	{
 		using var scope = Input.PlayerScope( Input.PlayerIndex.Controller1 );
 		return new SkateInput( -pad.LeftX, Input.Down( "SkatePush" ) ? 1f : 0f, Input.Down( "SkateBrake" ) ? 1f : 0f,

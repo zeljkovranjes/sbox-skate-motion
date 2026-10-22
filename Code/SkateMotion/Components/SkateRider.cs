@@ -785,8 +785,9 @@ public sealed class SkateRider : Component
 	private SkateInput RidingInput( ControllerReading pad, Vector3 move )
 	{
 		var ready = TrickDone();
+		move = LocalSkateInput.RidingMove( move );
 		var keys = _input.ReadKeys( Goofy, Time.Delta, move, ready );
-		var controller = _controller?.BoardInput( Goofy ) ?? LocalSkateInput.Pad( pad, Goofy );
+		var controller = _controller?.BoardInput( Goofy ) ?? LocalSkateInput.Pad( pad, Goofy, Board.State.IsAirborne );
 		var merged = DeviceMerge.Board( keys, DeviceMerge.SteeringKey( move ), controller, DeviceInputMerge.Activity( pad ) );
 		return ready ? merged : merged with { FlickX = 0f, FlickY = 0f };
 	}
