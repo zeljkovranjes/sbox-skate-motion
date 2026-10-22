@@ -7,7 +7,8 @@ namespace SkateMotion.Engine;
 /// Reads local keyboard and mouse into board input, merged with a gamepad's sticks and buttons for the board-only
 /// controls (DeviceInputMerge: neither device locks the other out). On keyboard the
 /// steering keys ramp the trucks in and out instead of jumping to full lock, and holding the flick button turns the
-/// mouse into the trick stick: pull down to crouch, flick up (or up and to a side) to pop. Holding Jump and releasing
+/// mouse into the trick stick: pull down to crouch, flick up (or up and to a side) to pop. Like a thumbstick let go, the
+/// mouse stick springs back to centre when the mouse rests, unless it is held out at the windup. Holding Jump and releasing
 /// it pops an ollie, with the flip keys held for a kickflip or heelflip. Holding push and brake together crouches for a
 /// hippy jump, and letting both go jumps. In the air, push or brake while grabbing leans into a front or back flip.
 /// </summary>
@@ -18,6 +19,8 @@ internal sealed class LocalSkateInput
 	private float _releaseX;
 	private readonly KeyRamp _steer = new( SteerIn, SteerOut );
 	private Vector2 _flick;
+	private float _rested;
+	private float _wound;
 
 	// Seconds for a steering key to reach full lock, and for released steering to centre.
 	private const float SteerIn = 0.35f;
@@ -25,6 +28,13 @@ internal sealed class LocalSkateInput
 
 	// Mouse travel, in pixels, that moves the trick stick from centre to its edge.
 	private const float FlickTravel = 90f;
+
+	// Seconds the mouse rests before the stick springs back, and how fast (1/s) it does; how near centre counts as let
+	// go, and how far out a windup is (where a pop is armed).
+	private const float RestGrace = 0.06f;
+	private const float SpringRate = 25f;
+	private const float Centred = 0.15f;
+	private const float WoundUp = 0.65f;
 
 	/// <summary>True while the mouse drives the trick stick (and so not the camera).</summary>
 	internal static bool Flicking
@@ -70,17 +80,40 @@ internal sealed class LocalSkateInput
 		var (flickX, flickY) = Keys( delta );
 		if ( Flicking )
 		{
-			_flick += new Vector2( Input.MouseDelta.x, -Input.MouseDelta.y ) / FlickTravel;
+			var moved = new Vector2( Input.MouseDelta.x, -Input.MouseDelta.y );
+			_flick += moved / FlickTravel;
 			if ( _flick.Length > 1f )
 				_flick = _flick.Normal;
+			_flick = Sprung( _flick, moved, Input.Down( "SkateGrabFront" ) || Input.Down( "SkateGrabBack" ), delta );
 			flickX = _flick.x;
 			flickY = _flick.y;
 		}
 		else
 		{
 			_flick = Vector2.Zero;
+			_wound = 0f;
 		}
 		return Board( steer, flickX, flickY, goofy, delta );
+	}
+
+	// A thumbstick let go springs back to centre; a mouse cannot be let go, so its stick does that itself once the mouse
+	// rests. Only a windup holds: out on the side the stick was first pulled to from centre, past where a pop is armed,
+	// it goes to the edge and stays there until the mouse moves it on. The flick after it springs back like any stick
+	// left part-way, so where the mouse happened to stop never goes on holding a manual (which steers with only part of
+	// the trucks), a windup or a flip after the trick. While a grab is held the stick tweaks it and stays where it is.
+	private Vector2 Sprung( Vector2 stick, Vector2 moved, bool grabbing, float delta )
+	{
+		_rested = moved == Vector2.Zero ? _rested + delta : 0f;
+		var resting = _rested >= RestGrace;
+		if ( resting && stick.Length < Centred )
+			_wound = 0f;
+		else if ( _wound == 0f && MathF.Abs( stick.y ) >= WoundUp )
+			_wound = MathF.Sign( stick.y );
+		if ( !resting || grabbing )
+			return stick;
+		if ( _wound != 0f && stick.y * _wound >= WoundUp )
+			return stick.Normal;
+		return stick * MathF.Exp( -SpringRate * delta );
 	}
 
 	// Jump held crouches; its release pops for a moment, sideways while a flip key is held. Manual keys tilt.
