@@ -76,6 +76,14 @@ internal sealed class RiderStateFacts
 	private const float PopGrace = 0.1f;
 	private float _windup;
 	private bool _windupNollie;
+
+	// Whether the wind-up under way began while a push stroke had just started (a no comply's), and whether the rider was
+	// winding up the frame before.
+	private bool _noComplyWind;
+	private bool _wasWinding;
+
+	// The foot the last push was asked for with: the right, or the left.
+	private bool _pushRight;
 	private float _windupLeft;
 
 	// The wind-up's shove-it as chosen (0 none, 1 a shove-it, 2 a 360 shove-it; null before one is), kept until the lean
@@ -182,9 +190,14 @@ internal sealed class RiderStateFacts
 			_windupLeft -= delta;
 		}
 		var windingUp = input.Windup > 0.15f || _windupLeft > 0f;
+		// A wind-up begun while a push stroke has just started (the push first, the pop flicked from it) is a no comply's:
+		// the rider pushes on rather than crouching, so the graph stays in the push's start and the pop goes from there into
+		// the no comply's foot plant. A wind-up held before the push, or begun with it, crouches as ever.
+		_noComplyWind = windingUp && _tricks.PushStarting( input ) && (_noComplyWind || !_wasWinding && _pushing);
+		_wasWinding = windingUp;
 		// Crouched for a pop, the rider is not pushing too: asked for both, the graph would swap between the push and the
 		// wind-up every frame.
-		if ( input.Pushing && !windingUp )
+		if ( input.Pushing && (!windingUp || _noComplyWind) )
 		{
 			var explicitFeet = input.PushLeft || input.PushRight;
 			if ( input.PushLeft ) Intent( "left-push" );
@@ -193,6 +206,7 @@ internal sealed class RiderStateFacts
 				Intent( mirrored ? "right-push" : "left-push" );
 			if ( explicitFeet ? input.NewPush : !_pushing )
 				Intent( "new-push" );
+			_pushRight = input.PushRight || !input.PushLeft && mirrored;
 		}
 		_pushing = input.Pushing;
 		// The hippy jump is asked for as both feet pushing at once.
@@ -227,7 +241,7 @@ internal sealed class RiderStateFacts
 		{
 			_balanceTime = 0f;
 		}
-		if ( windingUp )
+		if ( windingUp && !_noComplyWind )
 			Intent( Anticipation( _windupNollie, input.WindupSpin ), _windup );
 		else
 			_shove = null;
@@ -344,7 +358,10 @@ internal sealed class RiderStateFacts
 		known[ "is-body-flipping" ] = input.BodyFlipping ? 1f : 0f;
 		// Meeting a wall is not a landing: the rider rides on along it.
 		known[ "has-tilt-to-large-for-preland" ] = input.WallRiding ? 1f : 0f;
-		known[ "is-riding-goofy" ] = input.Goofy ? 1f : 0f;
+		// The rider's own stance, except on a no comply's pop: the graph goes from a push's start into the no comply only
+		// from a front-foot push, so the pop is told the stance that makes the foot pushing the front one (the right foot is
+		// a goofy rider's front foot).
+		known[ "is-riding-goofy" ] = (_tricks.NoComplyPopping( input ) ? _pushRight : input.Goofy) ? 1f : 0f;
 		known[ "is-mirrored" ] = mirrored ? 1f : 0f;
 		known[ "is-dark" ] = Dark ? 1f : 0f;
 		known[ "is-skitching" ] = input.Skitching ? 1f : 0f;

@@ -63,7 +63,7 @@ internal sealed class RiderTrickFacts
 		GroundGrabs( intents, known, input, hand, onRail, delta );
 		// A no comply goes from the push stroke straight into its foot plant: as it pops, the graph is told the push's own
 		// gesture, its way from a push's start into the no comply's foot plant (which has no lead-in clip of its own).
-		if ( NoComply( input ) && input.TimeSincePop < PopMoment )
+		if ( NoComplyPopping( input ) )
 		{
 			known[ "has-gesture-intent" ] = 1f;
 			facts.SetArgument( "has-gesture-intent", "group", "square" );
@@ -103,6 +103,16 @@ internal sealed class RiderTrickFacts
 	// An ollie popped as a push stroke starts, still on the ground: a no comply.
 	private bool NoComply( in RiderAnimationInput input ) =>
 		input.Trick is "ollie" or "nollie" && _sincePushStart < NoComplyWindow && !input.Airborne;
+
+	/// <summary>True on a no comply's pop, while it still counts as leaving the ground.</summary>
+	internal bool NoComplyPopping( in RiderAnimationInput input ) => NoComply( input ) && input.TimeSincePop < PopMoment;
+
+	/// <summary>
+	/// True while a push stroke started on the ground less than <see cref="NoComplyWindow"/> ago, by this frame's input
+	/// (read before or after <see cref="Fill"/>): a pop flicked now is a no comply.
+	/// </summary>
+	internal bool PushStarting( in RiderAnimationInput input ) =>
+		input.Pushing && !input.Airborne && (!_pushing || _sincePushStart < NoComplyWindow);
 
 	/// <summary>
 	/// A board adjust without a grab: the trick stick held in the air tilts the board toward the rider's toes or heels
