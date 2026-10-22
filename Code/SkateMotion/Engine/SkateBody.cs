@@ -141,6 +141,7 @@ internal sealed class SkateBody
 		var impact = 0f;
 		var collision = 0f;
 		var wall = Settings.Recovered && _pilot.Ridden ? WallAhead() : null;
+		var ground = Settings.Recovered && _pilot.Ridden ? GroundBelow() : null;
 		for ( var i = 0; i < steps; i++ )
 		{
 			_assembly.BeginStep();
@@ -162,7 +163,7 @@ internal sealed class SkateBody
 				? _airAssist.Landing( incoming.Position, Math.Min( _assembly.Body( 1 ).Position.Z, _assembly.Body( 2 ).Position.Z ),
 					incoming.Velocity, rails, Settings.Gravity, HandlingCurves.GrindNudge( Settings.Difficulty ) )
 				: null;
-			result = _pilot.Apply( _assembly, contacts, controls, delta, _map.Grind, wall, landingRail );
+			result = _pilot.Apply( _assembly, contacts, controls, delta, _map.Grind, wall, landingRail, ground );
 			_slideLanding = landingRail is { } landing
 				&& MathF.Abs( System.Numerics.Vector3.Dot( _assembly.Deck.Forward, landing ) ) < RailContacts.SlideAlong;
 			// Measured handling: a rider in the air near a rail is carried onto it. Coming down just beside one, the board
@@ -307,6 +308,12 @@ internal sealed class SkateBody
 		var height = floor.Hit ? (hit.HitPosition.z - floor.HitPosition.z) / SkateUnits.InchesPerMetre : 10f;
 		return new WallSight( SkateUnits.Metres( hit.HitPosition ), SkateUnits.ToCore( hit.Normal ), height );
 	}
+
+	// The ground straight below the deck (metres up) as the rider's landing look finds it, or null with none in reach.
+	private float? GroundBelow() =>
+		LandingLook.Ground( _body.Scene, SkateUnits.Inches( _assembly.Deck.Position ), _body.GameObject ) is { } ground
+			? ground / SkateUnits.InchesPerMetre
+			: null;
 
 	// Off a rail, which side of the deck the nearest one is on, across the deck's right as it came along that rail
 	// (kept while it is too close to tell); on starting a grind, that side, or with none seen the way the board was

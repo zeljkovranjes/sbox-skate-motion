@@ -79,6 +79,9 @@ internal sealed class BoardPilot
 		return Vector3.Dot( Vector3.Cross( _previousNormal, normal ) / step, Vector3.Normalize( across ) );
 	}
 	private float _takeoffHeight;
+	// The ground seen below the deck as it last stood on something (metres up), or null with none seen: a flight comes down
+	// that far over the ground below it (BodyFlip.LandingHeight).
+	private float? _takeoffGround;
 
 	/// <summary>True while a powerslide or revert has the wheels sliding.</summary>
 	internal bool PowerSliding => _slide.Sliding;
@@ -217,8 +220,10 @@ internal sealed class BoardPilot
 	private const float PopSteer = 0.2f;
 
 	/// <param name="landingRail">Direction of the rail the board is coming down on in the air, or null.</param>
+	/// <param name="groundBelow">Height (metres) of the ground seen straight below the deck, or null with none seen.</param>
 	internal PhysicsStep Apply( ArticulatedBoard assembly, ReadOnlySpan<CollisionContact> contacts,
-		ControlInput input, float step, GrindLock grind = default, WallSight? wall = null, Vector3? landingRail = null )
+		ControlInput input, float step, GrindLock grind = default, WallSight? wall = null, Vector3? landingRail = null,
+		float? groundBelow = null )
 	{
 		input = input.Sanitized();
 		var runout = false;
@@ -286,6 +291,7 @@ internal sealed class BoardPilot
 		if ( supported )
 		{
 			_takeoffHeight = body.Position.Z;
+			_takeoffGround = groundBelow;
 			_flip.Reset();
 			_plant.Ground( SupportPoint( contacts, body.Position ), normal );
 		}
@@ -554,7 +560,8 @@ internal sealed class BoardPilot
 			else if ( _attached && !_bailed && _settings.Recovered && _airTime >= FlightTime )
 			{
 				// Grabbing and leaning flips rider and board over together; leaning alone tips the board.
-				var flight = BodyFlip.FlightLeft( body.Position.Z - _takeoffHeight, body.Velocity.Z, _settings.Gravity );
+				var landing = BodyFlip.LandingHeight( _takeoffHeight, _takeoffGround, groundBelow );
+				var flight = BodyFlip.FlightLeft( body.Position.Z - landing, body.Velocity.Z, _settings.Gravity );
 				var flip = _flip.Step( body, input.Lean, input.Grab, input.Goofy, flight, step );
 				if ( _flip.Flipping )
 					assembly.AddImpulse( 0, Vector3.Zero, body.AngularImpulse( flip ) );

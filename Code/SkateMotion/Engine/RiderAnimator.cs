@@ -638,23 +638,17 @@ internal sealed class RiderAnimator
 		return _grabLetGo;
 	}
 
-	// Seconds until a body here, rising at this speed (m/s), comes down onto whatever is below it; zero with nothing
-	// below in reach.
+	// Seconds until a body here, rising at this speed (m/s), comes down onto whatever is below it (LandingLook, the look
+	// the board's body flips count their flight by); zero with nothing below in reach.
 	private float TimeToLand( Vector3 position, float rising )
 	{
-		var below = _board.Scene.Trace.Ray( position, position + Vector3.Down * GroundReach )
-			.IgnoreGameObjectHierarchy( _board ).IgnoreGameObjectHierarchy( _rider ).Run();
-		if ( !below.Hit )
+		if ( LandingLook.Ground( _board.Scene, position, _board, _rider ) is not { } ground )
 			return 0f;
-		var drop = (position.z - below.HitPosition.z) / SkateUnits.InchesPerMetre;
-		return BodyFlip.FlightLeft( drop, rising, Gravity );
+		return BodyFlip.FlightLeft( (position.z - ground) / SkateUnits.InchesPerMetre, rising, Gravity );
 	}
 
 	// Gravity (m/s^2) the landing prediction assumes.
 	private const float Gravity = 9.8f;
-
-	// Farthest (inches) below the board the ground is looked for.
-	private const float GroundReach = 2000f;
 
 	private void ClearHelperIk()
 	{

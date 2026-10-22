@@ -75,4 +75,12 @@ internal sealed class BodyFlip
 	/// rising at <paramref name="rising"/>, coming back down to that height.</summary>
 	internal static float FlightLeft( float height, float rising, float gravity ) =>
 		gravity > 0f ? (rising + MathF.Sqrt( MathF.Max( 0f, rising * rising + 2f * gravity * MathF.Max( height, 0f ) ) )) / gravity : 0f;
+
+	/// <summary>
+	/// The deck height a flight comes down at: as high over the ground seen below it now as it rode over the ground it
+	/// left, so off a roof or past a ramp's lip the flight is counted down to the ground under it, not only back to the
+	/// height it left from. With either ground not seen, that height (<paramref name="takeoffHeight"/>).
+	/// </summary>
+	internal static float LandingHeight( float takeoffHeight, float? takeoffGround, float? groundBelow ) =>
+		groundBelow is { } ground && takeoffGround is { } left ? ground + (takeoffHeight - left) : takeoffHeight;
 }
