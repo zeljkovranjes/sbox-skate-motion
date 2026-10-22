@@ -90,6 +90,9 @@ public sealed class SkateRider : Component
 	/// </summary>
 	public string AnimationOverlay => _animator?.HandlingMotion;
 
+	/// <summary>True while the rider plays its get-up after a bail (see <see cref="Recover"/>).</summary>
+	public bool GettingUp => _animator?.GettingUp ?? false;
+
 	/// <summary>True while the rider rides switch: the other foot forward, the board's tail leading.</summary>
 	public bool RidingSwitch => _animator?.Switch ?? false;
 
@@ -620,6 +623,12 @@ public sealed class SkateRider : Component
 	/// over seconds: the player's own body as it was, so taking its place shows no jump.
 	/// </summary>
 	public void BlendFrom( Transform[] modelPose, float seconds ) => _animator?.BlendFrom( modelPose, seconds );
+
+	/// <summary>
+	/// As <see cref="BlendFrom"/>, from each bone's place in the world: the pose is taken into the rider model's frame where
+	/// the rider is next shown, so it starts where that body stood even if the rider has moved before it is first shown.
+	/// </summary>
+	public void BlendFromWorld( Transform[] worldPose, float seconds ) => _animator?.BlendFromWorld( worldPose, seconds );
 
 	// Another player's rider: its ragdoll is made here from the owner's bail, and put away when the owner rides again.
 	// Returns true while it lies there, when nothing else of the riding update applies.

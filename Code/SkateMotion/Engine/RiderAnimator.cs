@@ -27,6 +27,13 @@ internal sealed class RiderAnimator
 	private readonly Transform _leftAnkle;
 	private readonly Transform _rightAnkle;
 	private RiderRagdoll _ragdoll;
+	// After a bail, the get-up the rider plays as it stands (seconds), whether it is playing it and for how long, and how
+	// long its first poses take to ease from the pose the body lay in: shown at once, the body jumped from lying to the
+	// get-up's first pose (9-10 in at the pelvis) in a frame.
+	private const float GetUpSeconds = 1.6f;
+	private const float GetUpBlend = 0.4f;
+	private bool _gettingUp;
+	private TimeSince _sinceGetUp;
 	private readonly GameObject _rider;
 	private readonly GameObject _board;
 	private ClipRiderAnimation _clips;
@@ -272,6 +279,9 @@ internal sealed class RiderAnimator
 
 	/// <summary>Blends the clips' first poses from a body pose (see <see cref="Components.SkateRider.BlendFrom"/>).</summary>
 	internal void BlendFrom( Transform[] modelPose, float seconds ) => _clips?.BlendFrom( modelPose, seconds );
+
+	/// <summary>As <see cref="BlendFrom"/>, from bone transforms in the world (see <see cref="Components.SkateRider.BlendFromWorld"/>).</summary>
+	internal void BlendFromWorld( Transform[] worldPose, float seconds ) => _clips?.BlendFromWorld( worldPose, seconds );
 
 	internal IReadOnlyList<string> Actions( string family, string style ) =>
 		_clips?.Actions( family, style ) ?? System.Array.Empty<string>();
@@ -822,6 +832,7 @@ internal sealed class RiderAnimator
 		// start from the model's bind pose.
 		_ragdoll = new( _renderer, velocity, angularVelocity, origin, mass, gravity, _clips?.BoneName( "hips" ) ?? "pelvis", _board );
 		_clips?.Clear();
+		_ragdoll.ShowParts();
 	}
 
 	/// <summary>Where the rider's head is shown this frame, or null when the model has no head bone.</summary>
@@ -849,17 +860,38 @@ internal sealed class RiderAnimator
 		return across.z > 0f ? "recovery-onright" : "recovery-onleft";
 	}
 
+	/// <summary>True while the rider plays its get-up after a bail.</summary>
+	internal bool GettingUp => _gettingUp && _sinceGetUp < GetUpSeconds;
+
 	internal void Recover( GameObject rider )
 	{
 		var getUp = _clips is null ? null : GetUpAction();
+		var lying = LyingPose();
 		_ragdoll?.Destroy();
 		_ragdoll = null;
 		_visual.SetParent( rider, false );
 		_visual.LocalPosition = Vector3.Zero;
 		_visual.LocalRotation = Rotation.Identity;
 		_animation.Enabled = true;
-		if ( getUp is not null )
-			_clips.Request( new Dictionary<string, string> { [ "family" ] = "wipeout", [ "action" ] = getUp, [ "phase" ] = "once" }, 1.6f );
+		_gettingUp = getUp is not null;
+		_sinceGetUp = 0f;
+		if ( getUp is null )
+			return;
+		_clips.Request( new Dictionary<string, string> { [ "family" ] = "wipeout", [ "action" ] = getUp, [ "phase" ] = "once" }, GetUpSeconds );
+		if ( lying is not null )
+			_clips.BlendFromWorld( lying, GetUpBlend );
+	}
+
+	// Each bone's place in the world as the body lies now, or null without a posed model.
+	private Transform[] LyingPose()
+	{
+		var scene = _renderer.SceneModel;
+		if ( scene is null || _renderer.Model is null )
+			return null;
+		var pose = new Transform[ _renderer.Model.BoneCount ];
+		for ( var bone = 0; bone < pose.Length; bone++ )
+			pose[ bone ] = scene.GetBoneWorldTransform( bone );
+		return pose;
 	}
 
 	private void UpdateDefaultFeet( bool goofy )

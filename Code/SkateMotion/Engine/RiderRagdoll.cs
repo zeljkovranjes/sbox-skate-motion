@@ -75,6 +75,21 @@ internal sealed class RiderRagdoll
 		LiftOutOfWorld( renderer, board );
 	}
 
+	// The bones of the parts are placed where the parts are, at once: clearing the clips' places cleared the places the
+	// physics gave them as it took over, and until its next update the body showed in its bind pose around its root part.
+	internal void ShowParts()
+	{
+		var scene = _renderer.SceneModel;
+		if ( scene is null )
+			return;
+		var model = _renderer.WorldTransform;
+		foreach ( var part in _physics.Bodies )
+		{
+			if ( part.Component.IsValid() )
+				scene.SetBoneOverride( part.Bone, model.ToLocal( part.Component.WorldTransform ) );
+		}
+	}
+
 	// A pose released partly inside the world (a rider upside down under the board) would start its parts under
 	// the ground and fall forever; the whole body moves up by the deepest part's depth instead, keeping its pose.
 	private void LiftOutOfWorld( SkinnedModelRenderer renderer, GameObject board )

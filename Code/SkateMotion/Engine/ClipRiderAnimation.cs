@@ -714,10 +714,12 @@ internal sealed class ClipRiderAnimation
 
 	internal void Request( IReadOnlyDictionary<string, string> tags, float seconds ) => _director.Request( tags, seconds );
 
-	// A body pose the first poses blend from (model-space bone transforms), and how far into the blend it is.
+	// A body pose the first poses blend from (model-space bone transforms), and how far into the blend it is; and whether
+	// it is still in the world's space, to be taken into the model's frame where the model is next placed.
 	private Transform[] _fadeFrom;
 	private float _fadeFor;
 	private float _fadeTime;
+	private bool _fadeFromWorld;
 
 	internal void BlendFrom( Transform[] modelPose, float seconds )
 	{
@@ -726,6 +728,14 @@ internal sealed class ClipRiderAnimation
 		_fadeFrom = modelPose;
 		_fadeFor = seconds;
 		_fadeTime = 0f;
+		_fadeFromWorld = false;
+	}
+
+	/// <summary>As <see cref="BlendFrom"/>, from each bone's place in the world.</summary>
+	internal void BlendFromWorld( Transform[] worldPose, float seconds )
+	{
+		BlendFrom( worldPose, seconds );
+		_fadeFromWorld = _fadeFrom is not null;
 	}
 
 	internal IReadOnlyList<string> Actions( string family, string style ) => _graph.Actions( family, style );
@@ -1037,6 +1047,13 @@ internal sealed class ClipRiderAnimation
 		var fade = _fadeFrom is null ? 1f : Smoothstep( Math.Clamp( _fadeTime / _fadeFor, 0f, 1f ) );
 		if ( fade >= 1f )
 			_fadeFrom = null;
+		if ( _fadeFrom is not null && _fadeFromWorld )
+		{
+			var modelAt = _renderer.WorldTransform;
+			for ( var bone = 0; bone < _fadeFrom.Length; bone++ )
+				_fadeFrom[ bone ] = modelAt.ToLocal( _fadeFrom[ bone ] );
+			_fadeFromWorld = false;
+		}
 		for ( var bone = 0; bone < _positions.Length; bone++ )
 		{
 			var transform = new Transform( SkateUnits.ToEngine( _retargeter.ToModel( _positions[ bone ] ) ),
