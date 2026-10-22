@@ -224,7 +224,7 @@ internal sealed class BoardPilot
 		var runout = false;
 		if ( _attached && !_bailed
 			&& LandingSafety.RequiresBail( assembly, contacts, _settings.BailSpeed, step, out var closing, out var struck,
-				grind.Active || landingRail is not null || _sinceGrind < RailExitGrace ) )
+				grind.Active || landingRail is not null || _sinceGrind < RailExitGrace, _wall.Wall ) )
 		{
 			// Measured handling: running into something side-on at a moderate speed while standing upright makes the
 			// rider step off and run it out; anything harder, or a crash into the ground, is a bail.

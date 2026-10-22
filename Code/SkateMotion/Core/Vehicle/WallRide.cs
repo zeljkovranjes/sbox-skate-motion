@@ -17,19 +17,31 @@ internal sealed class WallRide
 	private float _time;
 	private Vector3 _normal;
 
+	// Seconds the board riding a wall has been off it.
+	private float _loose;
+
 	/// <summary>True while the board is turning to a wall, riding it or turning back from it.</summary>
 	internal bool Active => _phase != Phase.None;
 
 	/// <summary>True while the board rides along a wall.</summary>
 	internal bool Riding => _phase == Phase.Riding;
 
+	/// <summary>The face (its normal) of the wall the board is turning to or riding along, or null.</summary>
+	internal Vector3? Wall => _phase is Phase.Approach or Phase.Riding ? _normal : null;
+
 	/// <summary>Lowest contact (m above the floor) a wall ride starts at, the slowest travel along the wall (m/s) that
-	/// starts or keeps one, how long (seconds) ahead a wall is turned to, and the longest ride (seconds).</summary>
+	/// starts or keeps one, how long (seconds) ahead a wall is turned to, and the longest ride (seconds). An ollie popped at
+	/// a kicker's lip leaves less speed along the wall than the run-up had (the pop pushes back along the deck tilted up the
+	/// kicker): from a 24 in kicker at 6 m/s, 2.7 m/s, under the 3 it took before.</summary>
 	internal const float MinimumHeight = 0.6f;
-	internal const float MinimumAlong = 3f;
+	internal const float MinimumAlong = 2.5f;
 	internal const float KeepAlong = 2f;
 	internal const float Reach = 0.45f;
 	internal const float RideTime = 1.5f;
+
+	/// <summary>Seconds a board riding a wall may be off it (a bounce as it comes onto the wall, rising) and still ride it.
+	/// </summary>
+	internal const float LooseHold = 0.15f;
 
 	/// <summary>Speed (m/s) down the wall at which the ride ends, and the speed (m/s) the board steps off the wall at.</summary>
 	internal const float SlideDown = 1f;
@@ -54,7 +66,14 @@ internal sealed class WallRide
 	{
 		var lift = Vector3.Zero;
 		if ( _phase == Phase.Riding )
+		{
+			// Off the wall for a moment: still riding it, its wheels kept to it and pulled back onto it. Ended on the first
+			// step off it, a board coming onto the wall rising bounced off it at once and never rode it.
+			_loose += step;
+			if ( _loose < LooseHold )
+				return (Turn( body, _normal, Along( body, _normal ), Response, step ), -_normal * (Press * step));
 			_phase = Phase.Leaving;
+		}
 		if ( _phase is Phase.None or Phase.Approach )
 		{
 			if ( wall is { } sight && Approaching( body, sight, out var time ) )
@@ -97,6 +116,7 @@ internal sealed class WallRide
 		}
 		if ( _phase != Phase.Riding )
 			return (Vector3.Zero, Vector3.Zero, Vector3.Zero);
+		_loose = 0f;
 		_time += step;
 		var along = body.Velocity - normal * Vector3.Dot( body.Velocity, normal );
 		if ( _time > RideTime || along.Length() < KeepAlong || body.Velocity.Z < -SlideDown )
@@ -112,6 +132,7 @@ internal sealed class WallRide
 	{
 		_phase = Phase.None;
 		_time = 0f;
+		_loose = 0f;
 	}
 
 	// Heading for the wall at a glancing angle, high enough, and soon enough; with the seconds until it gets there.
