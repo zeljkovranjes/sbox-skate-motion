@@ -16,6 +16,13 @@ internal sealed class RiderAnimationDirector
 	private bool _fast;
 	private int _lean;
 	private float _blendLean;
+
+	// How fast each spring-followed blend is moving (see Follow).
+	private float _blendLeanRate;
+	private float _blendTwistRate;
+	private float _carvingRate;
+	private float _crouchRate;
+	private float _tuckRate;
 	private float _blendTwist;
 	private float _carving;
 	private float _crouch;
@@ -122,21 +129,40 @@ internal sealed class RiderAnimationDirector
 
 	// Numeric parameters that blends read, in the units their clips store: lean -1 to 1, crouch as the centre of
 	// mass height in metres, speed in metres per second, wall tilt +1 backside and -1 frontside. Push weights are
-	// 0 to 1. Each eases toward its target so held input never snaps a pose.
+	// 0 to 1. Each eases toward its target so held input never snaps a pose; the ones the stick and the crouch move
+	// follow as springs (see Follow).
+	// Rate (per second) of the springs the stick's and the crouch's blends follow, critically damped: about as quick as
+	// the ease they replaced, which moved at its fastest the frame the stick did, so the body's lean jerked as a turn
+	// began or swapped sides (the fingers and eyes 1.3 to 2.1 as a steer went over from one side to the other).
+	private const float BlendSpring = 12f;
+
+	// Moves a blend toward its target as a critically damped spring, exactly over the step: its speed starts and ends at
+	// nothing and never steps, however the target jumps.
+	private static void Follow( ref float value, ref float rate, float target, float delta )
+	{
+		if ( !(delta > 0f) )
+			return;
+		var offset = value - target;
+		var push = rate + BlendSpring * offset;
+		var fade = MathF.Exp( -BlendSpring * delta );
+		value = target + (offset + push * delta) * fade;
+		rate = (rate - push * BlendSpring * delta) * fade;
+	}
+
 	private void Blends( in RiderAnimationInput input, float steer, float delta, AnimationParameters parameters )
 	{
 		var speed = MathF.Abs( input.Speed );
 		var ease = 1f - MathF.Exp( -8f * delta );
-		_blendLean += (steer - _blendLean) * ease;
-		_carving += ((MathF.Abs( steer ) > 0.15f && speed > 1f ? 1f : 0f) - _carving) * ease;
+		Follow( ref _blendLean, ref _blendLeanRate, steer, delta );
+		Follow( ref _carving, ref _carvingRate, MathF.Abs( steer ) > 0.15f && speed > 1f ? 1f : 0f, delta );
 		// The handling's crouch (pumping, low on steep ground) shows too.
 		var crouch = input.Pumping || input.Windup > 0.15f ? 1f : Math.Clamp( input.Crouch, 0f, 1f );
-		_crouch += (crouch - _crouch) * ease;
-		_tuck += (Math.Clamp( (speed - 6f) / 3f, 0f, 1f ) - _tuck) * ease;
+		Follow( ref _crouch, ref _crouchRate, crouch, delta );
+		Follow( ref _tuck, ref _tuckRate, Math.Clamp( (speed - 6f) / 3f, 0f, 1f ), delta );
 		parameters.Set( "blend-lean", _blendLean );
 		// Steering leans a grind's or slide's pose over the rail: eased like the lean, so starting or letting go of a turn
 		// moves the rider's body and feet across instead of jumping them to the other pose in one frame.
-		_blendTwist += (steer - _blendTwist) * ease;
+		Follow( ref _blendTwist, ref _blendTwistRate, steer, delta );
 		parameters.Set( "blend-twist", _blendTwist );
 		parameters.Set( "blend-carving", _carving );
 		// Slow, tight carves are quick; fast ones are long.
