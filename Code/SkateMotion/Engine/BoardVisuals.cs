@@ -378,6 +378,16 @@ internal sealed class BoardVisuals
 				_truckRest[ i ] = deck.ToLocal( trucks[ i ] );
 			_restCaptured = true;
 		}
+		// A board model's wheels and trucks rest where the model has them. Its first physical pose can come before the
+		// wheels have dropped onto their suspension (a board made in the hand has them still up at the deck's middle), and
+		// taken as their rest place it held them there, the deck through their middles.
+		if ( _parts is not null )
+		{
+			for ( var i = 0; i < 4; i++ )
+				_wheelRest[ i ] = new Transform( _parts.WheelCentre( i ), _rig.WheelRotations[ i ], _wheelRest[ i ].Scale );
+			for ( var i = 0; i < 2; i++ )
+				_truckRest[ i ] = new Transform( _parts.AxleCentre( i ), Rotation.Identity, _truckRest[ i ].Scale );
+		}
 		// The deck dips into a turn about its trucks' pivots; trucks and wheels stay level with the ground under it.
 		var deckPose = Blend( Leaned( shown ) );
 		// A truck bolted to the deck leans with it, and its wheels tilt with it, staying on the ground; the wheels never come
