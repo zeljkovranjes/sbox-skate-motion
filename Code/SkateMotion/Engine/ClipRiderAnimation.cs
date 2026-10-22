@@ -537,6 +537,8 @@ internal sealed class ClipRiderAnimation
 		if ( assets.Graph.BoardHandling is not null )
 			_handling = new BoardHandlingAnimationLayer( assets.Clips.RawPoses, assets.Graph );
 		_anchor = string.IsNullOrEmpty( assets.Graph.AnchorBone ) ? -1 : assets.Clips.Skeleton.IndexOf( assets.Graph.AnchorBone );
+		if ( _states is not null )
+			_states.Board = _anchor;
 		_fit = new RiderBoardFit( assets.Graph.Board );
 		var bones = renderer.Model.Bones.AllBones.OrderBy( bone => bone.Index ).ToArray();
 		var names = bones.Select( bone => bone.Name ).ToArray();
@@ -1880,6 +1882,8 @@ internal sealed class ClipRiderAnimation
 	// than HandBackTurn and moves no faster than HandBackMove beyond the physical board, easing in and out. Handed back
 	// in a fixed 0.15 s from the clips' board, a board turned under the feet in the air (a board adjust held through the
 	// landing, 72-80 degrees round) swung back at 500 degrees a second the moment it landed, the feet with it.
+	// A board is the same end for end: one landing within OtherEnd of the physical board's other end (a shove-it caught
+	// late) is handed over from that end, on round the way it was spinning, rather than turned back across its spin.
 	private Transform? Landing( bool airborne, bool riding, Transform animated, Transform physical, float delta )
 	{
 		var landing = !airborne && riding && _boardShown > 0f && _letGo is null && Finite( physical )
@@ -1893,14 +1897,17 @@ internal sealed class ClipRiderAnimation
 		{
 			if ( _shownOn is not { } from )
 				return null;
-			_landFrom = from;
 			_landMove = Vector3.Zero;
 			_landTurn = System.Numerics.Vector3.Zero;
 			if ( _shownOnBefore is { } before && _shownStep > 0f )
 			{
 				_landMove = (from.Position - before.Position) / _shownStep;
-				_landTurn = TurnBetween( SkateUnits.ToCore( before.Rotation ), SkateUnits.ToCore( from.Rotation ) ) / _shownStep;
+				_landTurn = TurnBetween( SkateUnits.ToCore( NearerEnd( before.Rotation, from.Rotation ) ), SkateUnits.ToCore( from.Rotation ) )
+					/ _shownStep;
 			}
+			if ( TurnAngle( from.Rotation * HalfTurn ) < OtherEnd )
+				from = from.WithRotation( from.Rotation * HalfTurn );
+			_landFrom = from;
 			var turn = TurnBetween( System.Numerics.Quaternion.Identity, SkateUnits.ToCore( from.Rotation ) ).Length() + _landTurn.Length() * LandCarry;
 			var move = from.Position.Length + _landMove.Length * LandCarry;
 			_landLength = MathF.Max( BoardHandBack, 1.5f * MathF.Max( turn / HandBackTurn, move / HandBackMove ) );
@@ -1938,6 +1945,18 @@ internal sealed class ClipRiderAnimation
 	private const float LandCarry = 0.03f;
 	private const float HandBackTurn = 6f;
 	private const float HandBackMove = 40f;
+
+	// A half turn about a board's own up, and how near (radians) a board must come to another's other end to be taken as
+	// that end (as StateGraphPlayer takes a clip's board).
+	private static readonly Rotation HalfTurn = Rotation.FromYaw( 180f );
+	private const float OtherEnd = MathF.PI / 3f;
+
+	// The angle (radians) a rotation turns by, the shorter way round.
+	private static float TurnAngle( Rotation rotation ) => 2f * MathF.Acos( Math.Min( 1f, MathF.Abs( rotation.w ) ) );
+
+	// A board's rotation, or the same board turned end for end, whichever is nearer another.
+	private static Rotation NearerEnd( Rotation board, Rotation other ) =>
+		TurnAngle( other.Inverse * board * HalfTurn ) < TurnAngle( other.Inverse * board ) ? board * HalfTurn : board;
 
 	// The rotation vector (axis times radians) turning one rotation into another, the shorter way round.
 	private static System.Numerics.Vector3 TurnBetween( System.Numerics.Quaternion from, System.Numerics.Quaternion to )

@@ -78,6 +78,14 @@ internal sealed class RiderStateFacts
 	private bool _windupNollie;
 	private float _windupLeft;
 
+	// The wind-up's shove-it as chosen (0 none, 1 a shove-it, 2 a 360 shove-it; null before one is), kept until the lean
+	// is ShoveMargin clear of the threshold it would cross: a stick held still on a threshold (a controller's diagonal, a
+	// mouse's wind-up held at the edge) swapped the graph between two wind-up cycles each time it wobbled across.
+	private int? _shove;
+	private const float ShoveLean = 0.5f;
+	private const float Shove360Lean = 0.87f;
+	private const float ShoveMargin = 0.06f;
+
 	// Seconds since the rider began stepping off the board (zero otherwise), and its physical situation on the board.
 	private float _dismounting;
 	private string _boardPhysics = "ground";
@@ -221,6 +229,8 @@ internal sealed class RiderStateFacts
 		}
 		if ( windingUp )
 			Intent( Anticipation( _windupNollie, input.WindupSpin ), _windup );
+		else
+			_shove = null;
 		if ( popping )
 		{
 			Intent( "trick" );
@@ -538,10 +548,18 @@ internal sealed class RiderStateFacts
 
 	// The wind-up as the graph names it, off the tail or the nose; leaned to a side it winds up a shove-it, a 360
 	// shove-it when leaned well over (toward the toes is frontside).
-	private static string Anticipation( bool nose, float spin )
+	private string Anticipation( bool nose, float spin )
 	{
 		var lean = MathF.Abs( spin );
-		var shove = lean < 0.5f ? null : lean < 0.87f ? "pop-shuvit" : "360-pop-shuvit";
+		var level = lean < ShoveLean ? 0 : lean < Shove360Lean ? 1 : 2;
+		if ( _shove is { } held && level != held )
+		{
+			var threshold = (level > held ? held + 1 : held) == 2 ? Shove360Lean : ShoveLean;
+			if ( MathF.Abs( lean - threshold ) < ShoveMargin )
+				level = held;
+		}
+		_shove = level;
+		var shove = level == 0 ? null : level == 1 ? "pop-shuvit" : "360-pop-shuvit";
 		if ( shove is null )
 			return nose ? "nollie-anticipation" : "ollie-anticipation";
 		var side = spin > 0f ? (shove == "pop-shuvit" ? "fs-" : "fs") : "";

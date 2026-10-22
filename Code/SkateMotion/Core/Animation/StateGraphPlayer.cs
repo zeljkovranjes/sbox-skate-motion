@@ -102,16 +102,36 @@ internal sealed class StateGraphPlayer
 	/// <summary>Multiplies the playing state's speed (1 = as authored), e.g. to match a pushing foot to the ground.</summary>
 	internal float RateScale { get; set; } = 1f;
 
+	/// <summary>
+	/// The board's bone (its up along its own Z), or -1 for none. A board is the same end for end, so a change that finds
+	/// the new clip's board nearly the other way round from the board shown turns the board shown over to its other end
+	/// rather than back (see <see cref="CaptureOffsets"/>).
+	/// </summary>
+	internal int Board { get; set; } = -1;
+
+	// A half turn about a bone's own up (Z), and how near (radians) the board shown turned so must come to the new clip's
+	// board for it to be taken that way round: a third of a half turn, so a board held across the rider (a shifty, a board
+	// adjust, at 90-120 degrees) still goes back the way it came.
+	private static readonly Quaternion HalfTurn = new( 0f, 0f, 1f, 0f );
+	private const float OtherEnd = MathF.PI / 3f;
+
 	// Transitions are inertialized rather than crossfaded from a frozen pose: when a clip starts, each bone's
 	// difference from the pose shown last (position, and rotation along the shortest arc) is recorded and then
 	// eased out while the new clip plays its own motion. A fast-moving bone (a flipping board) therefore keeps
 	// moving through the change, and no blend ever passes between two nearly opposite rotations, where blending
 	// flips to the other way round in a single frame.
+	// A shove-it's clip ends with its board turned half round under the rider, and the clip after it has its board the way
+	// it started: the offset between them, eased out the shorter way, spun the board back across the whole spin (173
+	// degrees at up to 900 degrees a second after a pop shove-it, landing with it still 30-60 degrees round, and a varial
+	// kickflip's tipped 40 degrees over as it went). A board is the same end for end, so one the new clip has within
+	// OtherEnd of its other end is taken as turned on to that end, and only what is left of the spin eases out.
 	private void CaptureOffsets( float speed, AnimationParameters parameters )
 	{
 		var widest = 0f;
 		for ( var bone = 0; bone < _offsetRotations.Length; bone++ )
 		{
+			if ( bone == Board && Between( _from.Rotations[ bone ] * HalfTurn, _scratch.Rotations[ bone ] ) < OtherEnd )
+				_from.Rotations[ bone ] = Quaternion.Normalize( _from.Rotations[ bone ] * HalfTurn );
 			_offsetPositions[ bone ] = _from.Positions[ bone ] - _scratch.Positions[ bone ];
 			var offset = Quaternion.Normalize( _from.Rotations[ bone ] * Quaternion.Conjugate( Quaternion.Normalize( _scratch.Rotations[ bone ] ) ) );
 			_offsetRotations[ bone ] = offset.W < 0f ? Quaternion.Negate( offset ) : offset;
@@ -129,6 +149,47 @@ internal sealed class StateGraphPlayer
 
 	// Fastest a fade turns any bone, radians per second: 900 degrees, a quick swing of an arm.
 	private const float FastestTurn = 15.7f;
+
+	// A state leaving as its clip ends does so a few hundredths of a second before the end (its test's Within), and the
+	// new clip took over from there: a flip's clip catches its board in its last 0.05-0.1 s, so left 0.05 s early the board
+	// stopped 25-65 degrees short of the catch and drifted the rest of the way over the fade (a varial's still tipped 31
+	// degrees as it landed). The board plays the outgoing clip out to its end under the change: what the outgoing clip still
+	// turns and moves it is added to its offset from the new clip, frame by frame, as the offset eases out. Only a clip left
+	// within PlayOut seconds of the end of its pass is played out.
+	private AnimationClip _outgoing;
+	private float _outgoingTime;
+	private float _outgoingEnd;
+	private float _outgoingSpeed;
+	private SkeletonPose _outgoingPose;
+	private SkeletonPose _outgoingNext;
+	private const float PlayOut = 0.1f;
+
+	private void PlayOutFrom( AnimationClip clip, float time, float length, float speed, AnimationParameters parameters )
+	{
+		_outgoing = clip;
+		_outgoingTime = time;
+		_outgoingEnd = length - EndHeld;
+		_outgoingSpeed = speed;
+		_outgoingPose ??= new SkeletonPose( _clips.Skeleton.Count );
+		_outgoingNext ??= new SkeletonPose( _clips.Skeleton.Count );
+		_outgoingPose.Sample( clip, _clips.Skeleton, MathF.Min( time, _outgoingEnd ), true, parameters );
+	}
+
+	private void PlayOutBoard( float delta, AnimationParameters parameters )
+	{
+		if ( _outgoing is null || Board < 0 || Board >= _offsetRotations.Length )
+			return;
+		var time = MathF.Min( _outgoingTime + delta * _outgoingSpeed, _outgoingEnd );
+		_outgoingNext.Sample( _outgoing, _clips.Skeleton, time, true, parameters );
+		_offsetPositions[ Board ] += _outgoingNext.Positions[ Board ] - _outgoingPose.Positions[ Board ];
+		var step = Quaternion.Normalize( Quaternion.Normalize( _outgoingNext.Rotations[ Board ] )
+			* Quaternion.Conjugate( Quaternion.Normalize( _outgoingPose.Rotations[ Board ] ) ) );
+		_offsetRotations[ Board ] = Quaternion.Normalize( step * _offsetRotations[ Board ] );
+		(_outgoingPose, _outgoingNext) = (_outgoingNext, _outgoingPose);
+		_outgoingTime = time;
+		if ( time >= _outgoingEnd )
+			_outgoing = null;
+	}
 
 	// The offsets keep the pose through a change but not the speed: the new clip's own motion shows at full speed from
 	// the frame it starts, so a bone it moves faster than the bone was moving (a push cycle that opens with a quick
@@ -193,6 +254,10 @@ internal sealed class StateGraphPlayer
 		var sine = axis.Length();
 		return sine < 1e-7f ? axis * 2f : axis * (2f * MathF.Atan2( sine, turn.W ) / sine);
 	}
+
+	// The angle (radians) between two rotations, the shorter way round.
+	private static float Between( Quaternion a, Quaternion b ) =>
+		2f * MathF.Acos( Math.Min( 1f, MathF.Abs( Quaternion.Dot( Quaternion.Normalize( a ), Quaternion.Normalize( b ) ) ) ) );
 
 	private static Quaternion Rotation( Vector3 turn )
 	{
@@ -283,6 +348,7 @@ internal sealed class StateGraphPlayer
 			_played = Graph.PlayCount;
 			_passEnd = float.NaN;
 			var next = Graph.Clip is { } name ? _clips.Find( name ) : null;
+			_outgoing = null;
 			if ( next is not null && !ReferenceEquals( next, _clip ) || next is not null && _clip is null )
 			{
 				Continue( steady, delta, previousStep );
@@ -291,6 +357,8 @@ internal sealed class StateGraphPlayer
 				var phase = _clip is null ? 0f : _time / outgoing;
 				var first = _clip is null;
 				phase -= MathF.Floor( phase );
+				if ( !first && Board >= 0 && speed > 0f && (1f - phase) * outgoing <= PlayOut )
+					PlayOutFrom( _clip, phase * outgoing, outgoing, speed, parameters );
 				// A clip left within a frame of the end of its pass has run it: the next carries on from the start of its
 				// own, not from just short of its end (where it would wrap round to its start a frame later).
 				if ( (1f - phase) * outgoing <= PassEnd )
@@ -326,6 +394,8 @@ internal sealed class StateGraphPlayer
 		{
 			if ( _fade <= 0f )
 				CaptureOffsets( (Graph.Play?.Speed ?? 1f) * RateScale, parameters );
+			else
+				PlayOutBoard( delta, parameters );
 			_fade = Math.Min( 1f, _fade + delta / Math.Max( _fadeTime, 0.0001f ) );
 			ApplyLag( _scratch, delta );
 			Inertialize( output );
