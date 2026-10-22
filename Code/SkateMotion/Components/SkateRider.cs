@@ -792,7 +792,7 @@ public sealed class SkateRider : Component
 	{
 		var ready = TrickDone();
 		move = LocalSkateInput.RidingMove( move );
-		var keys = _input.ReadKeys( Goofy, Time.Delta, move, ready );
+		var keys = _input.ReadKeys( Goofy, Time.Delta, move, ready, Board.State.IsAirborne );
 		var controller = _controller?.BoardInput( Goofy ) ?? LocalSkateInput.Pad( pad, Goofy, Board.State.IsAirborne );
 		var merged = DeviceMerge.Board( keys, DeviceMerge.SteeringKey( move ), controller, DeviceInputMerge.Activity( pad ) );
 		return ready ? merged : merged with { FlickX = 0f, FlickY = 0f };

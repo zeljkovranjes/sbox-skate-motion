@@ -14,7 +14,7 @@ namespace SkateMotion.Engine;
 /// </summary>
 internal sealed class LocalSkateInput
 {
-	private bool _charging;
+	private readonly PopKeyRelease _popKey = new();
 	private float _release;
 	private float _releaseX;
 	private readonly KeyRamp _steer = new( SteerIn, SteerOut );
@@ -78,14 +78,15 @@ internal sealed class LocalSkateInput
 	/// <summary>
 	/// The keyboard and mouse alone, whatever device the engine counts as last. move is the movement keys' share of
 	/// the movement input (DeviceMerge.KeyboardMove). While not <paramref name="ready"/> (a trick still playing out on
-	/// the ground) the mouse stick lets go.
+	/// the ground) the mouse stick lets go. In the air (<paramref name="airborne"/>) Jump held longer than a tap holds a
+	/// board adjust, and letting it go pops nothing.
 	/// </summary>
-	internal SkateInput ReadKeys( bool goofy, float delta, Vector3 move, bool ready = true )
+	internal SkateInput ReadKeys( bool goofy, float delta, Vector3 move, bool ready = true, bool airborne = false )
 	{
 		using var scope = Input.PlayerScope( Input.PlayerIndex.KeyboardAndMouse );
 		var steer = _steer.Step( move.y, delta );
 		_steerKey = move.y;
-		var (flickX, flickY) = Keys( delta );
+		var (flickX, flickY) = Keys( delta, airborne );
 		if ( Flicking && ready )
 		{
 			var moved = new Vector2( Input.MouseDelta.x, -Input.MouseDelta.y );
@@ -124,16 +125,16 @@ internal sealed class LocalSkateInput
 		return stick * MathF.Exp( -SpringRate * delta );
 	}
 
-	// Jump held crouches; its release pops for a moment, sideways while a flip key is held. Manual keys tilt.
-	private (float X, float Y) Keys( float delta )
+	// Jump held crouches; its release pops for a moment, sideways while a flip key is held (in the air only after a tap:
+	// held longer, it was holding a board adjust). Manual keys tilt.
+	private (float X, float Y) Keys( float delta, bool airborne )
 	{
 		var charging = Input.Down( "Jump" );
-		if ( _charging && !charging )
+		if ( _popKey.Step( charging ? -1 : 0, airborne, delta ) != 0 )
 		{
 			_release = 0.06f;
 			_releaseX = (Input.Down( "SkateFlipRight" ) ? 1f : 0f) - (Input.Down( "SkateFlipLeft" ) ? 1f : 0f);
 		}
-		_charging = charging;
 		// A flip key still held after the pop keeps the flip turning, as a stick held at the end of its flick does.
 		var held = (Input.Down( "SkateFlipRight" ) ? 1f : 0f) - (Input.Down( "SkateFlipLeft" ) ? 1f : 0f);
 		var flickX = _release > 0f ? _releaseX : charging ? 0f : held;
