@@ -25,7 +25,7 @@ internal sealed class SyntheticBoard
 	private readonly List<int> _triangles = new();
 	private readonly Dictionary<string, List<int>> _pieces = new();
 
-	private SyntheticBoard( bool welded, bool wheelsOnTrucks )
+	private SyntheticBoard( bool welded, bool wheelsOnTrucks, bool rigid = false )
 	{
 		var deckBottom = RideHeight - DeckThickness * 0.5f;
 		Box( "deck", new Vector3( 0f, 0f, RideHeight ), new Vector3( DeckLength, DeckWidth, DeckThickness ) );
@@ -33,6 +33,14 @@ internal sealed class SyntheticBoard
 		{
 			var x = (truck == 0 ? 0.5f : -0.5f) * Wheelbase;
 			var end = truck == 0 ? "front" : "rear";
+			if ( rigid )
+			{
+				// A hinge, not a truck: one block from the axle up against the deck's underside, with no room to lean on.
+				Box( $"hanger {end}", new Vector3( x, 0f, (Radius + deckBottom) * 0.5f ), new Vector3( 0.025f, Track * 0.9f, deckBottom - Radius ) );
+				for ( var side = 0; side < 2; side++ )
+					Wheel( $"wheel {truck * 2 + side}", new Vector3( x, (side == 0 ? 0.5f : -0.5f) * Track, Radius ) );
+				continue;
+			}
 			Box( $"hanger {end}", new Vector3( x, 0f, Radius + 0.005f ), new Vector3( 0.025f, Track * 0.9f, 0.03f ) );
 			Box( $"kingpin {end}", new Vector3( x - 0.01f, 0f, (Radius + 0.02f + deckBottom - 0.008f) * 0.5f ),
 				new Vector3( 0.012f, 0.012f, deckBottom - 0.008f - Radius - 0.02f ) );
@@ -49,6 +57,9 @@ internal sealed class SyntheticBoard
 	/// <summary>Every part its own piece of mesh, all welded into one piece, or each truck's wheels welded to its hanger
 	/// (a model with a mesh for the deck and one for each truck with its wheels).</summary>
 	internal static SyntheticBoard Build( bool welded = false, bool wheelsOnTrucks = false ) => new( welded, wheelsOnTrucks );
+
+	/// <summary>The board with each truck a rigid block from its axle up against the deck (a hinge), its own pieces.</summary>
+	internal static SyntheticBoard BuildRigid() => new( false, false, true );
 
 	/// <summary>The board as a mesh, turned into another frame (the board's own frame turned by <paramref name="turn"/>)
 	/// and scaled.</summary>

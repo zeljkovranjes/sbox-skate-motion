@@ -35,6 +35,13 @@ internal sealed class BoardPartDetector
 	// Where along its centre line the deck is measured when something hangs under its middle: shares of the half length
 	// from the middle, either side.
 	private static readonly float[] ClearOfMiddle = { 0.15f, 0.25f, 0.35f };
+
+	// The share of the deck's thickness a hanger or wheel may sit inside the deck or a baseplate as the deck leans: where
+	// they meet (a kingpin in its baseplate, a bushing against it) is hidden there, and nothing shows through.
+	private const float HiddenShare = 0.2f;
+
+	// Cells across the deck's width of the grid its underside is measured on, for how far it can lean.
+	private const int UndersideCells = 50;
 	private static readonly float[] Sides = { -1f, 1f };
 
 	private readonly BoardMesh _mesh;
@@ -497,6 +504,7 @@ internal sealed class BoardPartDetector
 			WheelRadius = Radius,
 			WheelWidth = width,
 			PivotHeight = pivot,
+			LeanLimit = LeanLimit( parts ),
 			InnerWheelGap = gap,
 			HangerRadius = HangerRadius( parts, gap ),
 			Length = _max.X - _min.X,
@@ -507,6 +515,83 @@ internal sealed class BoardPartDetector
 			PartBones = bones,
 			Source = allWheels ? BoardPartSource.Bones : source
 		};
+	}
+
+	// How far (radians) the deck can lean on its trucks before its underside and the baseplates on it come down through a
+	// hanger or a wheel, which stay level with the ground as it leans. A deck dipping by a small angle drops by about that
+	// angle times how far a point lies from its long middle, so each hanger or wheel point under the deck allows its gap
+	// (and a little more, hidden in the deck: HiddenShare) over that distance. The deck's underside is measured on a grid,
+	// at each cell's middle, every surface over it kept; a point is held to the nearest above it (or just into it, as far
+	// as is hidden).
+	private float LeanLimit( BoardPart[] parts )
+	{
+		var cell = _width / UndersideCells;
+		if ( !(cell > 0f) )
+			return float.PositiveInfinity;
+		var columns = (int)((_max.X - _min.X) / cell) + 1;
+		var rows = (int)((_max.Y - _min.Y) / cell) + 1;
+		var over = new List<float>[ columns * rows ];
+		for ( var t = 0; t < parts.Length; t++ )
+		{
+			if ( !Leans( parts[ t ] ) )
+				continue;
+			var a = _points[ _triangles[ t * 3 ] ];
+			var b = _points[ _triangles[ t * 3 + 1 ] ];
+			var c = _points[ _triangles[ t * 3 + 2 ] ];
+			var fromX = Math.Max( 0, (int)MathF.Ceiling( (MathF.Min( a.X, MathF.Min( b.X, c.X ) ) - _min.X) / cell - 0.5f ) );
+			var toX = Math.Min( columns - 1, (int)MathF.Floor( (MathF.Max( a.X, MathF.Max( b.X, c.X ) ) - _min.X) / cell - 0.5f ) );
+			var fromY = Math.Max( 0, (int)MathF.Ceiling( (MathF.Min( a.Y, MathF.Min( b.Y, c.Y ) ) - _min.Y) / cell - 0.5f ) );
+			var toY = Math.Min( rows - 1, (int)MathF.Floor( (MathF.Max( a.Y, MathF.Max( b.Y, c.Y ) ) - _min.Y) / cell - 0.5f ) );
+			for ( var x = fromX; x <= toX; x++ )
+			{
+				for ( var y = fromY; y <= toY; y++ )
+				{
+					var middle = new Vector2( _min.X + (x + 0.5f) * cell, _min.Y + (y + 0.5f) * cell );
+					if ( HeightAt( a, b, c, middle ) is { } height )
+						(over[ x * rows + y ] ??= new List<float>()).Add( height );
+				}
+			}
+		}
+		var hidden = Thickness * HiddenShare;
+		var limit = float.PositiveInfinity;
+		for ( var t = 0; t < parts.Length; t++ )
+		{
+			if ( Leans( parts[ t ] ) )
+				continue;
+			for ( var corner = 0; corner < 3; corner++ )
+			{
+				var point = _points[ _triangles[ t * 3 + corner ] ];
+				var away = MathF.Abs( point.Y - _centreY );
+				var x = (int)((point.X - _min.X) / cell);
+				var y = (int)((point.Y - _min.Y) / cell);
+				if ( away < cell || x < 0 || x >= columns || y < 0 || y >= rows || over[ x * rows + y ] is not { } heights )
+					continue;
+				var nearest = float.PositiveInfinity;
+				foreach ( var height in heights )
+				{
+					if ( height >= point.Z - hidden && height < nearest )
+						nearest = height;
+				}
+				if ( float.IsFinite( nearest ) )
+					limit = MathF.Min( limit, MathF.Max( 0f, nearest - point.Z + hidden ) / away );
+			}
+		}
+		return limit;
+	}
+
+	// The parts that lean with the deck: the deck and the baseplates fixed under it.
+	private static bool Leans( BoardPart part ) => part is BoardPart.Deck or BoardPart.FrontBaseplate or BoardPart.RearBaseplate;
+
+	// The height of a triangle over a point seen from above, or null when the point lies outside it.
+	private static float? HeightAt( Vector3 a, Vector3 b, Vector3 c, Vector2 point )
+	{
+		var d = (b.Y - c.Y) * (a.X - c.X) + (c.X - b.X) * (a.Y - c.Y);
+		if ( MathF.Abs( d ) < 1e-12f )
+			return null;
+		var u = ((b.Y - c.Y) * (point.X - c.X) + (c.X - b.X) * (point.Y - c.Y)) / d;
+		var v = ((c.Y - a.Y) * (point.X - c.X) + (a.X - c.X) * (point.Y - c.Y)) / d;
+		var w = 1f - u - v;
+		return u < 0f || v < 0f || w < 0f ? null : u * a.Z + v * b.Z + w * c.Z;
 	}
 
 	// How far the trucks reach below their axles across the middle of the gap between their wheels, where a rail ground on

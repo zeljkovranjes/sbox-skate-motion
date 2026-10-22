@@ -125,13 +125,24 @@ internal sealed class BoardVisuals
 		}
 	}
 
-	/// <summary>How far the deck dips into the current turn (radians, positive: its left side down).</summary>
-	internal float Roll => _lean.Roll;
+	/// <summary>
+	/// How far the deck dips into the current turn (radians, positive: its left side down): never further than the board's
+	/// own trucks and wheels leave it room to (BoardRig.LeanLimit), easing into that limit rather than stopping at it.
+	/// </summary>
+	internal float Roll
+	{
+		get
+		{
+			var roll = _lean.Roll;
+			var limit = _rig.LeanLimit;
+			return limit >= DeckLean.MaximumRoll ? roll : limit > 0f ? limit * MathF.Tanh( roll / limit ) : 0f;
+		}
+	}
 
 	/// <summary>A deck pose dipped by the deck's lean, about the line through the trucks' pivots under it.</summary>
 	internal Transform Leaned( Transform deck )
 	{
-		var roll = _lean.Roll;
+		var roll = Roll;
 		if ( roll == 0f )
 			return deck;
 		var turn = Rotation.FromAxis( Vector3.Forward, -roll * (180f / MathF.PI) );

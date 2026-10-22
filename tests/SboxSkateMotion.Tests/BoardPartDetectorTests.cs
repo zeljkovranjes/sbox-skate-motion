@@ -1,5 +1,6 @@
 using System.Numerics;
 using SkateMotion.Core.BoardModel;
+using SkateMotion.Core.Vehicle;
 using Xunit;
 
 namespace SboxSkateMotion.Tests;
@@ -7,6 +8,26 @@ namespace SboxSkateMotion.Tests;
 public class BoardPartDetectorTests
 {
 	private const float Millimetre = 0.001f;
+
+	[Fact]
+	public void TrucksAndWheelsWithRoomUnderTheDeckLeaveItItsFullLean()
+	{
+		var layout = BoardPartDetector.Detect( SyntheticBoard.Build().Mesh(), out var problem );
+
+		Assert.NotNull( layout );
+		Assert.True( layout.LeanLimit >= DeckLean.MaximumRoll, $"{layout.LeanLimit} rad, {problem}" );
+	}
+
+	[Fact]
+	public void HangersUpAgainstTheDeckKeepItFromLeaning()
+	{
+		// Hinges reaching the deck's underside 90 mm out from its middle: a deck leaning more than its hidden 2.4 mm over
+		// that (1.5 degrees) would come down through them.
+		var layout = BoardPartDetector.Detect( SyntheticBoard.BuildRigid().Mesh(), out var problem );
+
+		Assert.NotNull( layout );
+		Assert.InRange( layout.LeanLimit, 0.015f, 0.04f );
+	}
 
 	[Fact]
 	public void SeparatePiecesAreFoundWholeAndMeasured()

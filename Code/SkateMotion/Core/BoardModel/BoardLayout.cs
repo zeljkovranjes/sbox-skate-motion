@@ -37,6 +37,12 @@ internal sealed class BoardLayout
 	/// <summary>Height of the trucks' pivots: where a deck leaning on its trucks turns about them.</summary>
 	internal float PivotHeight { get; init; }
 
+	/// <summary>
+	/// The furthest the deck can lean on its trucks (radians) before it comes down through its own hangers or wheels, which
+	/// stay level with the ground as it leans; infinity when nothing of theirs lies under the deck.
+	/// </summary>
+	internal float LeanLimit { get; init; } = float.PositiveInfinity;
+
 	/// <summary>The deck's length, nose to tail.</summary>
 	internal float Length { get; init; }
 

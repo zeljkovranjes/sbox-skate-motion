@@ -31,6 +31,12 @@ internal sealed class BoardRig
 	/// <summary>How far (inches) below the deck's middle the line through the trucks' pivots runs: the deck leans about it.</summary>
 	internal float PivotDepth { get; }
 
+	/// <summary>
+	/// The furthest the shown deck leans (radians): as far as the board model's own trucks and wheels leave it room to
+	/// (BoardLayout.LeanLimit), unlimited for a generated board.
+	/// </summary>
+	internal float LeanLimit { get; }
+
 	internal BoardRig( GameObject board, SkateSettings settings, float radius, GameObject[] wheels = null, BoardModelParts parts = null,
 		int[] partBones = null )
 	{
@@ -45,6 +51,7 @@ internal sealed class BoardRig
 		PartBones = partBones ?? parts?.Layout.PartBones;
 		Settings = parts is null ? settings : Measured( board, settings, radius, parts );
 		WheelRadius = parts?.Layout.WheelRadius ?? radius;
+		LeanLimit = parts?.Layout.LeanLimit ?? float.PositiveInfinity;
 		// The trucks' pivots sit about where the hanger meets the baseplate, three fifths of the way up from the axle to
 		// the deck's underside (the generated deck's is 7 mm below its middle).
 		var axle = Settings.RideHeight - WheelRadius;
