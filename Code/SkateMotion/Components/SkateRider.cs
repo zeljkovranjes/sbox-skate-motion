@@ -779,12 +779,25 @@ public sealed class SkateRider : Component
 			SetWalkInput( WalkingInput( pad, move ), keys.Jump || _controller?.Jump == true, keys.Sprint || _controller?.Sprint == true );
 	}
 
-	// Board input from the keys and the controller (through its profile when there is one), merged.
+	// Board input from the keys and the controller (through its profile when there is one), merged. A trick plays to its
+	// end before the next can start: on the ground, from a trick's pop to the end of its landing, the trick stick is let
+	// go. In the air it stays free, for grabs, late flips and a flip held on.
 	private SkateInput RidingInput( ControllerReading pad, Vector3 move )
 	{
-		var keys = _input.ReadKeys( Goofy, Time.Delta, move );
+		var ready = TrickDone();
+		var keys = _input.ReadKeys( Goofy, Time.Delta, move, ready );
 		var controller = _controller?.BoardInput( Goofy ) ?? LocalSkateInput.Pad( pad, Goofy );
-		return DeviceMerge.Board( keys, DeviceMerge.SteeringKey( move ), controller, DeviceInputMerge.Activity( pad ) );
+		var merged = DeviceMerge.Board( keys, DeviceMerge.SteeringKey( move ), controller, DeviceInputMerge.Activity( pad ) );
+		return ready ? merged : merged with { FlickX = 0f, FlickY = 0f };
+	}
+
+	// False on the ground while a trick's own animation (its pop and flight, or its landing) still plays.
+	private bool TrickDone()
+	{
+		if ( Board.State.IsAirborne )
+			return true;
+		var state = AnimationState;
+		return state is null || !state.StartsWith( "OnBoard.Trick." ) && !state.StartsWith( "OnBoard.Land." );
 	}
 
 	// Walking from the movement keys (relative to the view) or the left stick, whichever is in use.

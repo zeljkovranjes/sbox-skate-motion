@@ -70,15 +70,16 @@ internal sealed class LocalSkateInput
 
 	/// <summary>
 	/// The keyboard and mouse alone, whatever device the engine counts as last. move is the movement keys' share of
-	/// the movement input (DeviceMerge.KeyboardMove).
+	/// the movement input (DeviceMerge.KeyboardMove). While not <paramref name="ready"/> (a trick still playing out on
+	/// the ground) the mouse stick lets go.
 	/// </summary>
-	internal SkateInput ReadKeys( bool goofy, float delta, Vector3 move )
+	internal SkateInput ReadKeys( bool goofy, float delta, Vector3 move, bool ready = true )
 	{
 		using var scope = Input.PlayerScope( Input.PlayerIndex.KeyboardAndMouse );
 		var steer = _steer.Step( move.y, delta );
 		_steerKey = move.y;
 		var (flickX, flickY) = Keys( delta );
-		if ( Flicking )
+		if ( Flicking && ready )
 		{
 			var moved = new Vector2( Input.MouseDelta.x, -Input.MouseDelta.y );
 			_flick += moved / FlickTravel;
