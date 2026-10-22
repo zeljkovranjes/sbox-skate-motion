@@ -1059,9 +1059,18 @@ internal sealed class ClipRiderAnimation
 	// carries on a little and settles. Each bone's place and turn against its parent are followed, in metres; a frame
 	// after a gap (the rider hidden, a hitch) starts again from the pose as given. A board carried in the hand goes where
 	// the hand goes, its place in the hand kept.
+	// The skeleton's roots are followed in the model's frame, which turns round with the stance (riding switch faces the
+	// tail) and moves with the deck's place in the clip: on the frame it does, the roots are carried into the new frame.
+	// Followed on in the old frame they were eased back to where it had them, and the whole body jumped 5-6 in in a frame
+	// as a turn round rolling back down a bank, or a push from fakie, handed over to riding the other way.
 	private readonly PoseInertializer _shownFollow = new();
 	private SkeletonPose _settled;
 	private int[] _boneParents;
+	private int[] _boneRoots;
+
+	// On the frame the stance turns round, how the model's frame moved under the pose (a point in the last frame's model
+	// is Turn * point + Shift in this one, inches): the follower's roots are carried across by it (see Settle).
+	private (System.Numerics.Quaternion Turn, System.Numerics.Vector3 Shift)? _reframe;
 	private float _settledAt = float.NegativeInfinity;
 	private const float SettleGap = 0.25f;
 
@@ -1069,6 +1078,8 @@ internal sealed class ClipRiderAnimation
 	{
 		if ( _boneParents is null && _renderer.Model is { } rig )
 			_boneParents = rig.Bones.AllBones.OrderBy( bone => bone.Index ).Select( bone => bone.Parent?.Index ?? -1 ).ToArray();
+		if ( _boneParents is not null && _boneRoots is null )
+			_boneRoots = Enumerable.Range( 0, _boneParents.Length ).Where( bone => _boneParents[ bone ] < 0 ).ToArray();
 		var count = _positions.Length;
 		if ( _boneParents is null || _boneParents.Length != count )
 			return;
@@ -1095,6 +1106,9 @@ internal sealed class ClipRiderAnimation
 		}
 		var hand = mirror ? _mirroredCarryHand : _carryHand;
 		Transform? handBefore = hand >= 0 && CarriedBoardPose is not null ? HandOnModel( model, hand ) : null;
+		if ( _reframe is { } frame && _boneRoots is not null )
+			_shownFollow.Reframe( _boneRoots, frame.Turn, frame.Shift / SkateUnits.InchesPerMetre );
+		_reframe = null;
 		_shownFollow.Apply( _settled, delta );
 		for ( var bone = 0; bone < count; bone++ )
 		{
@@ -3698,6 +3712,8 @@ internal sealed class ClipRiderAnimation
 				? _skateboard.RenderTransform.ToWorld( before.ToLocal( _shownModel ) ) : _shownModel;
 			if ( !Finite( shownModel ) )
 				shownModel = _shownModel;
+			_reframe = (SkateUnits.ToCore( model.Rotation.Inverse * shownModel.Rotation ),
+				SkateUnits.ToCore( model.PointToLocal( shownModel.Position ) ));
 			for ( var bone = 0; bone < _positions.Length; bone++ )
 			{
 				var world = shownModel.PointToWorld( SkateUnits.ToEngine( _shownPositions[ bone ] ) );

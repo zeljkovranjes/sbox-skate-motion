@@ -58,6 +58,34 @@ internal sealed class PoseInertializer
 	/// <summary>Forgets the motion followed so far: the next pose is followed as given.</summary>
 	internal void Reset() => _seen = 0;
 
+	/// <summary>
+	/// Carries what has been followed of these bones into a new frame: their transforms are against a parent frame (the
+	/// whole model's, for a skeleton's roots) that has just turned by <paramref name="turn"/> and moved by
+	/// <paramref name="shift"/>, a point given in the old frame being <c>turn * point + shift</c> in the new. Their places,
+	/// turns, speeds and offsets are taken across, so a pose given in the new frame is followed on from where it was shown
+	/// rather than eased back to where the old frame had it.
+	/// </summary>
+	internal void Reframe( ReadOnlySpan<int> bones, Quaternion turn, Vector3 shift )
+	{
+		if ( _given is null || _seen == 0 )
+			return;
+		turn = Quaternion.Normalize( turn );
+		foreach ( var bone in bones )
+		{
+			if ( bone < 0 || bone >= _given.Length )
+				continue;
+			_given[ bone ] = Vector3.Transform( _given[ bone ], turn ) + shift;
+			_givenRate[ bone ] = Vector3.Transform( _givenRate[ bone ], turn );
+			_offset[ bone ] = Vector3.Transform( _offset[ bone ], turn );
+			_offsetRate[ bone ] = Vector3.Transform( _offsetRate[ bone ], turn );
+			// A turn's offset and speeds are rotation vectors in the parent's frame: turned with it.
+			_givenTurn[ bone ] = Quaternion.Normalize( turn * _givenTurn[ bone ] );
+			_givenTurnRate[ bone ] = Vector3.Transform( _givenTurnRate[ bone ], turn );
+			_turnOffset[ bone ] = Vector3.Transform( _turnOffset[ bone ], turn );
+			_turnOffsetRate[ bone ] = Vector3.Transform( _turnOffsetRate[ bone ], turn );
+		}
+	}
+
 	/// <summary>The largest offset any bone is turned by this frame, radians.</summary>
 	internal float LargestTurn { get; private set; }
 
