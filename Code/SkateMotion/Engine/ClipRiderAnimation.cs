@@ -940,6 +940,8 @@ internal sealed class ClipRiderAnimation
 		model = HippyFlight( model, input, mirror, delta );
 		var flipped = _shownValid && mirror != _shownMirror;
 		EaseFlip( model, flipped, delta );
+		// The pose before the fits, against each bone's parent, for Settle to follow the shown pose over.
+		_unfittedValid = Finite( model ) && Finite( _positions[ 0 ] ) && LocalPose( ref _unfitted );
 		// Turned round, the eased pose carries on from what was last shown, with the feet's pulls onto the deck and their
 		// pushes out of it and down to the ground already in it: those start again from nothing rather than being added a
 		// second time, and a pull carried with the board, whose clip ankle was kept in the model's frame from before the
@@ -1127,12 +1129,20 @@ internal sealed class ClipRiderAnimation
 	// carries on a little and settles. Each bone's place and turn against its parent are followed, in metres; a frame
 	// after a gap (the rider hidden, a hitch) starts again from the pose as given. A board carried in the hand goes where
 	// the hand goes, its place in the hand kept.
+	// It is followed over the pose before the fits, whose own motion (already continuous, see StateGraphPlayer) goes
+	// through as the fits leave it: followed alone, a clip's kick quicker than the budget was held back (a varial
+	// kickflip's front knee turned 2, 8 and then 21 degrees in successive frames as the board left the ground, and the
+	// foot was thrown up to 6 in off the clip's and back). Following only what the fits change instead swung a get-up's
+	// hips out and back: there the legs and hips are taken from the on-foot body, which stands still while the clip's
+	// under them moves.
 	// The skeleton's roots are followed in the model's frame, which turns round with the stance (riding switch faces the
 	// tail) and moves with the deck's place in the clip: on the frame it does, the roots are carried into the new frame.
 	// Followed on in the old frame they were eased back to where it had them, and the whole body jumped 5-6 in in a frame
 	// as a turn round rolling back down a bank, or a push from fakie, handed over to riding the other way.
 	private readonly PoseInertializer _shownFollow = new();
 	private SkeletonPose _settled;
+	private SkeletonPose _unfitted;
+	private bool _unfittedValid;
 	private int[] _boneParents;
 	private int[] _boneRoots;
 
@@ -1142,7 +1152,9 @@ internal sealed class ClipRiderAnimation
 	private float _settledAt = float.NegativeInfinity;
 	private const float SettleGap = 0.25f;
 
-	private void Settle( float delta, Transform model, bool mirror )
+	// The pose as _positions and _rotations hold it now (inches, in the model's frame) against each bone's parent, in
+	// metres, into pose (made to fit if it does not); false while the rig's bones are not known.
+	private bool LocalPose( ref SkeletonPose pose )
 	{
 		if ( _boneParents is null && _renderer.Model is { } rig )
 			_boneParents = rig.Bones.AllBones.OrderBy( bone => bone.Index ).Select( bone => bone.Parent?.Index ?? -1 ).ToArray();
@@ -1150,34 +1162,43 @@ internal sealed class ClipRiderAnimation
 			_boneRoots = Enumerable.Range( 0, _boneParents.Length ).Where( bone => _boneParents[ bone ] < 0 ).ToArray();
 		var count = _positions.Length;
 		if ( _boneParents is null || _boneParents.Length != count )
-			return;
-		if ( _settled is null || _settled.Positions.Length != count )
-			_settled = new SkeletonPose( count );
-		if ( Time.Now - _settledAt > SettleGap )
-			_shownFollow.Reset();
-		_settledAt = Time.Now;
+			return false;
+		if ( pose is null || pose.Positions.Length != count )
+			pose = new SkeletonPose( count );
 		for ( var bone = 0; bone < count; bone++ )
 		{
 			var parent = _boneParents[ bone ];
 			if ( parent >= bone )
-				return;
+				return false;
 			if ( parent < 0 )
 			{
-				_settled.Positions[ bone ] = _positions[ bone ] / SkateUnits.InchesPerMetre;
-				_settled.Rotations[ bone ] = System.Numerics.Quaternion.Normalize( _rotations[ bone ] );
+				pose.Positions[ bone ] = _positions[ bone ] / SkateUnits.InchesPerMetre;
+				pose.Rotations[ bone ] = System.Numerics.Quaternion.Normalize( _rotations[ bone ] );
 				continue;
 			}
 			var undo = System.Numerics.Quaternion.Conjugate( System.Numerics.Quaternion.Normalize( _rotations[ parent ] ) );
-			_settled.Positions[ bone ] = System.Numerics.Vector3.Transform( _positions[ bone ] - _positions[ parent ], undo )
+			pose.Positions[ bone ] = System.Numerics.Vector3.Transform( _positions[ bone ] - _positions[ parent ], undo )
 				/ SkateUnits.InchesPerMetre;
-			_settled.Rotations[ bone ] = System.Numerics.Quaternion.Normalize( undo * _rotations[ bone ] );
+			pose.Rotations[ bone ] = System.Numerics.Quaternion.Normalize( undo * _rotations[ bone ] );
 		}
+		return true;
+	}
+
+	private void Settle( float delta, Transform model, bool mirror )
+	{
+		if ( !LocalPose( ref _settled ) )
+			return;
+		var count = _positions.Length;
+		if ( Time.Now - _settledAt > SettleGap )
+			_shownFollow.Reset();
+		_settledAt = Time.Now;
 		var hand = mirror ? _mirroredCarryHand : _carryHand;
 		Transform? handBefore = hand >= 0 && CarriedBoardPose is not null ? HandOnModel( model, hand ) : null;
 		if ( _reframe is { } frame && _boneRoots is not null )
 			_shownFollow.Reframe( _boneRoots, frame.Turn, frame.Shift / SkateUnits.InchesPerMetre );
 		_reframe = null;
-		_shownFollow.Apply( _settled, delta );
+		_shownFollow.Apply( _settled, delta, _unfittedValid && _unfitted?.Positions.Length == count ? _unfitted : null );
+		_unfittedValid = false;
 		for ( var bone = 0; bone < count; bone++ )
 		{
 			var parent = _boneParents[ bone ];

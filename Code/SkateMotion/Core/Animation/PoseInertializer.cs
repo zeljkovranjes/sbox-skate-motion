@@ -14,6 +14,10 @@ using Vector3 = System.Numerics.Vector3;
 /// half-lives.
 /// A single frame's move past the jump limits (a looping clip's root coming back round, a body put somewhere else) is
 /// not a snap of the motion but a new start, and is followed at once.
+/// Given the pose under the one followed too (the clips' pose before the fits put the feet and hands where they go), a
+/// bone takes up at once as much of that pose's own change of speed as it makes itself, however sharp: only what the
+/// changes made over it add is eased. A clip's own kick so shows as it is, and a fit holding a bone where the pose under
+/// it moves away holds it, neither lagged nor thrown past.
 /// Works on the local transforms of any skeleton (positions in its own units, rotations against the parent).
 /// </summary>
 internal sealed class PoseInertializer
@@ -55,6 +59,16 @@ internal sealed class PoseInertializer
 	private Vector3[] _turnOffsetRate;
 	private int _seen;
 
+	// The pose under the one followed, as each bone was last frame: place, speed, turn and turning speed (NaN where not
+	// known: before its first frames, after a jump or a frame without it).
+	private Vector3[] _under;
+	private Vector3[] _underRate;
+	private Quaternion[] _underTurn;
+	private Vector3[] _underTurnRate;
+	private bool _underKnown;
+	private static readonly Vector3 Unknown = new( float.NaN );
+	private static readonly Quaternion UnknownTurn = new( float.NaN, float.NaN, float.NaN, float.NaN );
+
 	/// <summary>Forgets the motion followed so far: the next pose is followed as given.</summary>
 	internal void Reset() => _seen = 0;
 
@@ -83,6 +97,14 @@ internal sealed class PoseInertializer
 			_givenTurnRate[ bone ] = Vector3.Transform( _givenTurnRate[ bone ], turn );
 			_turnOffset[ bone ] = Vector3.Transform( _turnOffset[ bone ], turn );
 			_turnOffsetRate[ bone ] = Vector3.Transform( _turnOffsetRate[ bone ], turn );
+			// The pose under is in the same frame.
+			if ( _under is not null && bone < _under.Length )
+			{
+				_under[ bone ] = Vector3.Transform( _under[ bone ], turn ) + shift;
+				_underRate[ bone ] = Vector3.Transform( _underRate[ bone ], turn );
+				_underTurn[ bone ] = Quaternion.Normalize( turn * _underTurn[ bone ] );
+				_underTurnRate[ bone ] = Vector3.Transform( _underTurnRate[ bone ], turn );
+			}
 		}
 	}
 
@@ -90,11 +112,22 @@ internal sealed class PoseInertializer
 	internal float LargestTurn { get; private set; }
 
 	/// <summary>Follows <paramref name="pose"/> <paramref name="delta"/> seconds after the last, writing the shown pose into it.</summary>
-	internal void Apply( SkeletonPose pose, float delta )
+	internal void Apply( SkeletonPose pose, float delta ) => Apply( pose, delta, null );
+
+	/// <summary>
+	/// As <see cref="Apply(SkeletonPose, float)"/>, with <paramref name="under"/> the pose <paramref name="pose"/> was made
+	/// from (null for none): as much of each bone's change of speed as the pose under makes too goes through at once.
+	/// </summary>
+	internal void Apply( SkeletonPose pose, float delta, SkeletonPose under )
 	{
 		var count = pose.Positions.Length;
 		if ( _given is null || _given.Length != count )
 			Allocate( count );
+		if ( under is not null && under.Positions.Length != count )
+			under = null;
+		// Made here (not only in Allocate): a hot reload adds them to a follower already running.
+		if ( under is not null && (_under is null || _under.Length != count) )
+			AllocateUnder( count );
 		if ( _seen > 0 && !(delta > 0f) )
 		{
 			Show( pose );
@@ -103,14 +136,24 @@ internal sealed class PoseInertializer
 		if ( _seen == 0 || delta > LongestStep )
 		{
 			Start( pose );
+			ForgetUnder();
+			if ( under is not null )
+			{
+				for ( var bone = 0; bone < count; bone++ )
+					Under( under, bone, delta );
+				_underKnown = true;
+			}
 			return;
 		}
+		if ( under is null )
+			ForgetUnder();
 		var y = Damping( HalfLife );
 		var turnStep = TurnBudget * delta;
 		var moveStep = MoveBudget * delta;
 		var largest = 0f;
 		for ( var bone = 0; bone < count; bone++ )
 		{
+			var (underMove, underTurn) = under is null ? default : Under( under, bone, delta );
 			var position = pose.Positions[ bone ];
 			var rotation = Quaternion.Normalize( pose.Rotations[ bone ] );
 			if ( !Finite( position ) || !Finite( rotation ) )
@@ -127,7 +170,8 @@ internal sealed class PoseInertializer
 			{
 				var rate = moved / delta;
 				if ( _seen > 1 )
-					Follow( ref _offset[ bone ], ref _offsetRate[ bone ], rate - _givenRate[ bone ], moveStep, MoveBudget, FastestMove, y, delta );
+					Follow( ref _offset[ bone ], ref _offsetRate[ bone ], Unshared( rate - _givenRate[ bone ], underMove ), moveStep,
+						MoveBudget, FastestMove, y, delta );
 				_givenRate[ bone ] = rate;
 			}
 			_given[ bone ] = position;
@@ -149,7 +193,8 @@ internal sealed class PoseInertializer
 					// other hand's grab joined it, with an offset still out from the first, and the shown arm jumped 29.
 					var shown = Quaternion.Normalize( Exp( _turnOffset[ bone ] ) * _givenTurn[ bone ] );
 					var offset = _turnOffset[ bone ];
-					Follow( ref offset, ref _turnOffsetRate[ bone ], rate - _givenTurnRate[ bone ], turnStep, TurnBudget, FastestTurn, y, delta );
+					Follow( ref offset, ref _turnOffsetRate[ bone ], Unshared( rate - _givenTurnRate[ bone ], underTurn ), turnStep,
+						TurnBudget, FastestTurn, y, delta );
 					shown = Quaternion.Normalize( Exp( (rate + _turnOffsetRate[ bone ]) * delta ) * shown );
 					_turnOffset[ bone ] = offset == Vector3.Zero && _turnOffsetRate[ bone ] == Vector3.Zero
 						? Vector3.Zero
@@ -161,8 +206,76 @@ internal sealed class PoseInertializer
 			largest = MathF.Max( largest, _turnOffset[ bone ].Length() );
 		}
 		_seen++;
+		_underKnown |= under is not null;
 		LargestTurn = largest;
 		Show( pose );
+	}
+
+	// A bone's change of speed (or turning speed) less the share of the pose under's own change it makes too: along that
+	// change, as much of it as the bone makes, none of it to all of it, goes through at once and only the rest is eased.
+	// With no fit the two are one and nothing is eased; a fit holding a bone where the pose under leaves makes none of it.
+	private static Vector3 Unshared( Vector3 change, Vector3 under )
+	{
+		var size = under.LengthSquared();
+		if ( !(size > 1e-12f) || !float.IsFinite( size ) )
+			return change;
+		return change - under * Math.Clamp( Vector3.Dot( change, under ) / size, 0f, 1f );
+	}
+
+	// How much a bone of the pose under changed its speed and turning speed this frame (nothing where not known), keeping
+	// its place, turn and speeds for the next. A move or turn past the jump limits is a new start there too.
+	private (Vector3 Move, Vector3 Turn) Under( SkeletonPose under, int bone, float delta )
+	{
+		var move = Vector3.Zero;
+		var turn = Vector3.Zero;
+		var position = under.Positions[ bone ];
+		var rotation = Quaternion.Normalize( under.Rotations[ bone ] );
+		var moved = position - _under[ bone ];
+		if ( Finite( moved ) && moved.Length() <= MoveJump && delta > 0f )
+		{
+			var rate = moved / delta;
+			if ( Finite( _underRate[ bone ] ) )
+				move = rate - _underRate[ bone ];
+			_underRate[ bone ] = rate;
+		}
+		else
+			_underRate[ bone ] = Unknown;
+		_under[ bone ] = Finite( position ) ? position : Unknown;
+		var turned = Finite( rotation ) && Finite( _underTurn[ bone ] )
+			? Log( rotation * Quaternion.Conjugate( _underTurn[ bone ] ) ) : Unknown;
+		if ( Finite( turned ) && turned.Length() <= TurnJump && delta > 0f )
+		{
+			var rate = turned / delta;
+			if ( Finite( _underTurnRate[ bone ] ) )
+				turn = rate - _underTurnRate[ bone ];
+			_underTurnRate[ bone ] = rate;
+		}
+		else
+			_underTurnRate[ bone ] = Unknown;
+		_underTurn[ bone ] = Finite( rotation ) ? rotation : UnknownTurn;
+		return (move, turn);
+	}
+
+	private void AllocateUnder( int count )
+	{
+		_under = new Vector3[ count ];
+		_underRate = new Vector3[ count ];
+		_underTurn = new Quaternion[ count ];
+		_underTurnRate = new Vector3[ count ];
+		_underKnown = true;
+		ForgetUnder();
+	}
+
+	// Forgets the pose under: its next frames are taken as new.
+	private void ForgetUnder()
+	{
+		if ( !_underKnown || _under is null )
+			return;
+		System.Array.Fill( _under, Unknown );
+		System.Array.Fill( _underRate, Unknown );
+		System.Array.Fill( _underTurn, UnknownTurn );
+		System.Array.Fill( _underTurnRate, Unknown );
+		_underKnown = false;
 	}
 
 	private void Allocate( int count )
