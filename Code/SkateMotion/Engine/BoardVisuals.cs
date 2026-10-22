@@ -129,9 +129,10 @@ internal sealed class BoardVisuals
 	// off the wheels as it goes (Rise), as if on risers.
 	private const float TiltPastRoom = 1.6f;
 
-	// The furthest a rigid board (both trucks bolted to its deck) leans, radians (6 degrees): whole, wheels and all, onto
-	// the edge of the wheels on the side it dips to, its other wheels lifting off the ground.
-	private const float RigidLean = 0.105f;
+	// The furthest a rigid board (both trucks bolted to its deck) leans, radians, eased into (Roll): a full carve at riding
+	// speed takes it to 8 degrees. It leans whole, wheels and all, onto the edge of the wheels on the side it dips to, its
+	// other wheels lifting off the ground.
+	private const float RigidLean = 0.168f;
 
 	// Whether the board leans as one rigid piece: its trucks are both bolted to the deck (a hinge holds its wheels as
 	// fixed as the deck), so a deck leaning on its own would pull the axles out of the wheels on the ground.
