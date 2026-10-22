@@ -23,11 +23,12 @@ internal sealed class RiderAnimationDirector
 	private float _wall;
 	private float _balance;
 	private float _impactBlend;
+	private float _impactRate;
 	private bool _impactShown;
 
-	// Rate (per second) the impact blend eases toward a landing's impact on the ground, and the board adjust's in the air:
-	// quicker than the other blends, so a landing gives and a board adjust answers at once, yet over a few frames.
-	private const float ImpactEase = 15f;
+	// Stiffness (per second) of the spring the impact blend follows a landing's impact on the ground and the board adjust's
+	// in the air with: critically damped, so it is nine tenths of the way there in under 0.3 s and never overshoots.
+	private const float ImpactEase = 14f;
 
 	/// <param name="clipsGoofy">Whether the clips were authored with the right foot forward.</param>
 	internal RiderAnimationDirector( bool clipsGoofy ) => _clipsGoofy = clipsGoofy;
@@ -157,13 +158,27 @@ internal sealed class RiderAnimationDirector
 		// In the air this weight is the board adjust's magnitude: how far the trick stick is held over, which blends in a
 		// board adjust and tweaks the nose and tail grabs. On the ground it is the last landing's impact, which eases in: taken
 		// in a frame it gave the riding pose's knees and arms at once (a board thrown off its wheels at a bank's foot and
-		// meeting its face turned the head 10 degrees and an arm 24 in a frame). It eases the same way in the air and across
-		// the take-off and the landing: switched in a frame from the ground's weight to the stick's, every board adjust and
-		// grab the take-off went into moved the fingers and hands in one frame. Only the first weight given is taken at once.
+		// meeting its face turned the head 10 degrees and an arm 24 in a frame). It follows the same way in the air and across
+		// the take-off and the landing: taken from the stick in a frame, letting the stick go in the air straightened a leg
+		// 37 degrees in a frame. It follows a spring whose speed starts from rest: eased toward it at a rate, the weight took
+		// its fastest step on its first frame, which threw the arms 7 degrees a frame faster as a board adjust began. Only the
+		// first weight given is taken at once.
 		var impact = input.Airborne
 			? Math.Min( 1f, MathF.Sqrt( input.AirStickX * input.AirStickX + input.AirStickY * input.AirStickY ) )
 			: Math.Clamp( input.LandingSpeed / 6f, 0f, 1f );
-		_impactBlend = _impactShown ? _impactBlend + (impact - _impactBlend) * (1f - MathF.Exp( -ImpactEase * delta )) : impact;
+		if ( _impactShown && delta > 0f )
+		{
+			var off = _impactBlend - impact;
+			var pull = _impactRate + ImpactEase * off;
+			var decay = MathF.Exp( -ImpactEase * delta );
+			_impactBlend = impact + (off + pull * delta) * decay;
+			_impactRate = (_impactRate - ImpactEase * pull * delta) * decay;
+		}
+		else if ( !_impactShown )
+		{
+			_impactBlend = impact;
+			_impactRate = 0f;
+		}
 		_impactShown = true;
 		parameters.Set( "blend-impact", _impactBlend );
 		LandingBlend( input, parameters );
