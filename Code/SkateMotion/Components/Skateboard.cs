@@ -203,10 +203,13 @@ public sealed class Skateboard : Component, IBoardDisplay
 			_visuals?.Update( _adapter.Bodies, Simulating, RenderTransform, _solids, State.Grind != SkateGrind.None );
 	}
 
-	/// <summary>Sets held controls until the next call; where the board is not simulated they are sent to its owner.</summary>
+	/// <summary>Sets held controls until the next call; where the board is not simulated they are sent to its owner. While
+	/// an input override plays (a scripted timeline), it stands in for them: taken only in the board's steps, it left the
+	/// rider's animation reading the rider's own controls on frames without a step, so a held grab let go and grabbed
+	/// again in the air.</summary>
 	public void SetInput( SkateInput input )
 	{
-		_input = input;
+		_input = InputOverride is { } scripted ? scripted() : input;
 		_forwardInput = IsProxy;
 	}
 
