@@ -392,7 +392,12 @@ public sealed class Skateboard : Component, IBoardDisplay
 		return true;
 	}
 
-	protected override void OnStart() => Build();
+	protected override void OnStart()
+	{
+		// Spawned from a package loaded into a game already running, the board's scene has none of its systems yet.
+		SceneSystems.Ensure( Scene );
+		Build();
+	}
 
 	private void Build()
 	{
@@ -472,7 +477,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 	protected override void OnUpdate()
 	{
 		// The shown board rests on any rail it reaches, wherever an animation holds it.
-		Scene.GetSystem<GrindRails>()?.CollectSolids( WorldPosition, RailSearchInches, _solids );
+		SceneSystems.Get<GrindRails>( Scene )?.CollectSolids( WorldPosition, RailSearchInches, _solids );
 		if ( _visuals is not null )
 		{
 			_visuals.Grind = State.Grind;
@@ -634,7 +639,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 		var wasPlanting = State.HandPlanting;
 		var shownBefore = RenderTransform;
 		var started = System.Diagnostics.Stopwatch.GetTimestamp();
-		var railCount = Scene.GetSystem<GrindRails>()?.Collect( WorldPosition, RailSearchInches, _rails ) ?? 0;
+		var railCount = SceneSystems.Get<GrindRails>( Scene )?.Collect( WorldPosition, RailSearchInches, _rails ) ?? 0;
 		_adapter.AnimatedTricks = Time.Now - _displayedAt < AnimationTimeout;
 		_adapter.PushContact = PushContact;
 		_adapter.DarkSideUp = DarkSideUp;

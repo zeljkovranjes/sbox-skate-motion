@@ -696,7 +696,7 @@ public sealed class SkateRider : Component
 		_controller = controllerProfile is null ? null : new( controllerProfile );
 		var boardControls = Board.Components.Get<SkateControls>();
 		if ( boardControls.IsValid() ) boardControls.Enabled = false;
-		_animator.UseClips( Scene.GetSystem<RiderAnimationLibrary>().Get( AnimationClips, AnimationGraph ) );
+		_animator.UseClips( SceneSystems.Get<RiderAnimationLibrary>( Scene ).Get( AnimationClips, AnimationGraph ) );
 		_interaction = new( GameObject, Board.GameObject, Board.Body, _motor, _animator.RetrievalProfile );
 		_interaction.Called += ( shake, flight ) => BoardCalled?.Invoke( shake, flight );
 		_motor.FollowBoard();

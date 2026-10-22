@@ -35,9 +35,9 @@ public sealed class GrindRail : Component
 		GameObject.Tags.Add( SkateTags.Grind );
 	}
 
-	protected override void OnEnabled() => Scene.GetSystem<GrindRails>()?.Add( this );
+	protected override void OnEnabled() => SceneSystems.Get<GrindRails>( Scene )?.Add( this );
 
-	protected override void OnDisabled() => Scene.GetSystem<GrindRails>()?.Remove( this );
+	protected override void OnDisabled() => SceneSystems.Get<GrindRails>( Scene )?.Remove( this );
 
 	internal GrindEdgeChunk ReadEdges()
 	{
