@@ -878,6 +878,8 @@ internal sealed class RiderAnimator
 		_sinceGetUp = 0f;
 		if ( getUp is null )
 			return;
+		// What the clips showed before the bail is long gone: the get-up starts from the body as it lies.
+		_clips.ForgetShown();
 		_clips.Request( new Dictionary<string, string> { [ "family" ] = "wipeout", [ "action" ] = getUp, [ "phase" ] = "once" }, GetUpSeconds );
 		if ( lying is not null )
 			_clips.BlendFromWorld( lying, GetUpBlend );

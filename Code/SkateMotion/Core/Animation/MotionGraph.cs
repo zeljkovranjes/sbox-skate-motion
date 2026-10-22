@@ -28,6 +28,9 @@ internal sealed class MotionGraph
 	private float _time;
 	private float _fade;
 	private float _fadeDuration;
+
+	// Shortest fade (seconds) whose weight is eased in and out; a shorter one goes straight across.
+	private const float EasedFade = 0.05f;
 	private readonly int[] _entries;
 
 	internal MotionGraph( ClipSet clips, AnimationGraphDefinition definition )
@@ -56,6 +59,21 @@ internal sealed class MotionGraph
 	internal int MotionCount => _catalog.Count;
 
 	internal IReadOnlyList<string> Actions( string family, string style = null ) => _catalog.Actions( family, style );
+
+	/// <summary>
+	/// Starts the graph afresh, for one that has not been run for a while: its next state is entered at once, not faded
+	/// from the pose it last showed (long gone) nor reached through the last state's exit or a joining motion from it.
+	/// </summary>
+	internal void Forget()
+	{
+		_current = -1;
+		_pending = -1;
+		_transitioning = false;
+		_fade = _fadeDuration = 0f;
+		Finished = false;
+		_lastFamily = "";
+		_lastValue = "";
+	}
 
 	/// <summary>Name of the playing state, or null before the first update.</summary>
 	internal string State => _current >= 0 ? _states[ _current ].Name : null;
@@ -193,7 +211,11 @@ internal sealed class MotionGraph
 		if ( _fade >= _fadeDuration )
 			return;
 		_fade += delta;
+		// Eased in and out over a fade of EasedFade or more: at a weight going straight from 0 to 1 the fade's own speed
+		// starts and stops in a frame, and the body was set moving at once and stopped dead as each fade ended.
 		var weight = Math.Clamp( _fade / _fadeDuration, 0f, 1f );
+		if ( _fadeDuration >= EasedFade )
+			weight = weight * weight * (3f - 2f * weight);
 		_scratch.CopyFrom( output );
 		output.CopyFrom( _from );
 		output.BlendToward( _scratch, weight );

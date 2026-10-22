@@ -41,6 +41,9 @@ internal sealed class ClipRiderAnimation
 	private bool _shownRequest;
 	private bool _sourceShown;
 
+	// Whether the requested-motion graph was run last frame: run again after a frame or more without, it starts afresh.
+	private bool _graphRunning;
+
 	// Seconds a change between the graph and a requested motion is eased over.
 	private const float SourceBlend = 0.2f;
 
@@ -736,6 +739,27 @@ internal sealed class ClipRiderAnimation
 		_fadeFromWorld = false;
 	}
 
+	/// <summary>
+	/// Forgets what the clips last showed, for a body that has been shown by something else since (a ragdoll lying where it
+	/// fell): nothing eases on from that pose, long gone, any more, and a fade from the body's own (see
+	/// <see cref="BlendFromWorld"/>) takes over from it. Eased on from it (the riding pose from before a bail, a get-up's
+	/// requested motion faded from the last request's pose seconds before), a get-up face down swung the hips 43 in out and
+	/// back against the body's root over its first 0.2 s and stopped them dead.
+	/// </summary>
+	internal void ForgetShown()
+	{
+		_sourceShown = false;
+		_sourceTime = SourceBlend;
+		_graphRunning = false;
+		_shownValid = false;
+		_flipTime = FlipEase;
+		_continuity.Reset();
+		_shownFollow.Reset();
+		_placement.Reset();
+		foreach ( var hold in _locks )
+			hold.Reset();
+	}
+
 	/// <summary>As <see cref="BlendFrom"/>, from each bone's place in the world.</summary>
 	internal void BlendFromWorld( Transform[] worldPose, float seconds )
 	{
@@ -777,8 +801,16 @@ internal sealed class ClipRiderAnimation
 		_travelRate = (_states?.Graph.Play?.Speed ?? 1f) * (_states?.RateScale ?? 1f);
 		_travelling = !requested && _states is not null && _travel.Update( _states.Clip, _states.Time, delta * _travelRate,
 			_parameters, carryHand >= 0 ? _retargeter.SourceBone( carryHand, mirror ) : -1, _anchor );
+		// A request taking over from the graph starts its motion afresh (see MotionGraph.Forget): faded instead from the pose
+		// the requested motion last showed, seconds before, the body went that way and back as the ease from what the graph
+		// showed went out.
 		if ( requested )
+		{
+			if ( !_graphRunning )
+				_graph.Forget();
 			_graph.Update( _parameters, delta, _motionPose );
+		}
+		_graphRunning = requested;
 		// The board is dark side up while the graph is in a state that holds it so; the facts carry that into the next
 		// frame, so the graph's dark states can follow one another.
 		Dark = input.Activity == RiderActivity.Riding
