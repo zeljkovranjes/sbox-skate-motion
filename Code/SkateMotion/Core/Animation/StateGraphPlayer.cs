@@ -172,6 +172,14 @@ internal sealed class StateGraphPlayer
 	private SkeletonPose _outgoingNext;
 	private const float PlayOut = 0.1f;
 
+	// A way out that waits for the playing clip to end waits for its state's blend in as authored (seconds since the clip
+	// started against its BlendTime), not for the fade shown: a change far from the pose shown fades longer (see
+	// CaptureOffsets), and a short clip (a grab's out, 0.23 s) ran out with that fade still going, held its last pose
+	// still and waited, so the hand swinging through it stopped dead in a frame (450 in/s to nothing) and the clip after
+	// started from rest. The fade goes on under the next change, which carries it on.
+	private float _authoredBlend;
+	private float _sinceStart;
+
 	private void PlayOutFrom( AnimationClip clip, float time, float length, float speed, AnimationParameters parameters )
 	{
 		_outgoing = clip;
@@ -392,12 +400,13 @@ internal sealed class StateGraphPlayer
 			if ( nextTime > _time )
 				_passEnd = MathF.Floor( nextTime / Graph.ClipLength ) * Graph.ClipLength;
 		}
-		var nextFade = _fadeTime > 0f ? Math.Min( 1f, _fade + delta / Math.Max( _fadeTime, 0.0001f ) ) : 1f;
+		var blending = _sinceStart + delta < _authoredBlend;
 		// Conditions observe the playback being produced this frame, including any retained phase.
 		// A separately accumulated state timer can lag by one frame at a clip's wrap boundary.
 		_flagTime = nextTime;
 		_flagParameters = parameters;
-		Graph.Update( facts, delta, new AnimationPlaybackStatus( Graph.ClipLength - nextTime, nextFade < 1f ) );
+		Graph.Update( facts, delta, new AnimationPlaybackStatus( Graph.ClipLength - nextTime, blending ) );
+		_sinceStart += delta;
 		_time = nextTime;
 		_length = Graph.ClipLength;
 		if ( Graph.PlayCount != _played )
@@ -426,6 +435,8 @@ internal sealed class StateGraphPlayer
 				_length = _clip.Length( parameters );
 				_fadeTime = first ? Math.Max( Graph.Play.BlendTime, 0f ) : Math.Max( Graph.Play.BlendTime, MinimumBlend );
 				_fade = _fadeTime > 0f ? 0f : 1f;
+				_authoredBlend = Math.Max( Graph.Play.BlendTime, 0f );
+				_sinceStart = 0f;
 			}
 			else if ( next is not null )
 			{
@@ -435,6 +446,8 @@ internal sealed class StateGraphPlayer
 				_time = 0f;
 				_fadeTime = Math.Max( Graph.Play.BlendTime, MinimumBlend );
 				_fade = 0f;
+				_authoredBlend = Math.Max( Graph.Play.BlendTime, 0f );
+				_sinceStart = 0f;
 			}
 		}
 		if ( _clip is null )
