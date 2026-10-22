@@ -440,6 +440,14 @@ internal sealed class ClipRiderAnimation
 	private const float HipRiseRate = 20f;
 	private float _hipDrop;
 	private float _reachShort;
+
+	// On the ground too a foot put down onto it (a brake's dragging foot, a push) can be out of the leg's reach, the clip's
+	// skater reaching it with a leg nearly straight and the rider's legs proportioned otherwise: the rider is lowered (at
+	// most GroundHipDrop, at GroundDropRate) until it reaches within the leg's soft reach, the leg on the deck bending, and
+	// rises back as the foot lifts. Without it a braking foot stood still hung 1-1.2 in over the ground.
+	private const float GroundHipDrop = 3f;
+	private const float GroundDropRate = 30f;
+	private float _groundShort = float.NegativeInfinity;
 	private const float LockReach = 16f;
 
 	// Gap above the ground (inches) at which a descending foot is pinned, so it does not skid the last of the way.
@@ -907,13 +915,16 @@ internal sealed class ClipRiderAnimation
 		// The crouch follows last frame's reach on the rail (none: it holds), and goes off the rail.
 		// A board shown from the clip (dark side up, or handed back from the air) is placed from the rider as it stands, so the
 		// crouch never sinks it into the rail.
-		var crouch = string.IsNullOrEmpty( input.Grind ) ? 0f
+		var crouch = string.IsNullOrEmpty( input.Grind )
+			? riding && !input.Airborne && float.IsFinite( _groundShort ) ? Math.Clamp( _hipDrop + _groundShort, 0f, GroundHipDrop ) : 0f
 			: float.IsFinite( _reachShort ) ? Math.Clamp( _hipDrop + _reachShort, 0f, Dark ? DarkHipDrop : MaxHipDrop ) : _hipDrop;
 		// Down quickly, as a slide's pitch comes in under a foot that cannot reach the tail; back up more slowly.
 		_onRailFor = string.IsNullOrEmpty( input.Grind ) ? 0f : _onRailFor + delta;
 		var crouchRise = !string.IsNullOrEmpty( input.Grind ) && _onRailFor < CrouchHold ? 0f : HipRiseRate;
-		_hipDrop = Approach( _hipDrop, crouch, (_hipDrop < crouch ? HipDropRate : crouchRise) * delta );
+		var dropRate = string.IsNullOrEmpty( input.Grind ) ? GroundDropRate : HipDropRate;
+		_hipDrop = Approach( _hipDrop, crouch, (_hipDrop < crouch ? dropRate : crouchRise) * delta );
 		_reachShort = float.NegativeInfinity;
+		_groundShort = float.NegativeInfinity;
 		for ( var i = 0; i < _feet.Length; i++ )
 		{
 			if ( riding )
@@ -1001,6 +1012,8 @@ internal sealed class ClipRiderAnimation
 				_entryAge[ i ] = 0f;
 			}
 		}
+		if ( Finite( model ) && Finite( _positions[ 0 ] ) )
+			Settle( delta, model, mirror );
 		_shownValid = Finite( model ) && Finite( _positions[ 0 ] );
 		if ( _shownValid )
 		{
@@ -1037,6 +1050,74 @@ internal sealed class ClipRiderAnimation
 		if ( appearing )
 			scene.Update( 0f );
 	}
+
+	// The shown pose settles as one after every fit, as the clips' pose did before them (see PoseInertializer): a fit
+	// coming in or letting go (a foot planted, pressed onto the deck or lifted, a hand taking hold or letting go, the
+	// crouch), a knee turning over or a target jumping eases over rather than snapping, and a bone the fits stop dead
+	// carries on a little and settles. Each bone's place and turn against its parent are followed, in metres; a frame
+	// after a gap (the rider hidden, a hitch) starts again from the pose as given. A board carried in the hand goes where
+	// the hand goes, its place in the hand kept.
+	private readonly PoseInertializer _shownFollow = new();
+	private SkeletonPose _settled;
+	private int[] _boneParents;
+	private float _settledAt = float.NegativeInfinity;
+	private const float SettleGap = 0.25f;
+
+	private void Settle( float delta, Transform model, bool mirror )
+	{
+		if ( _boneParents is null && _renderer.Model is { } rig )
+			_boneParents = rig.Bones.AllBones.OrderBy( bone => bone.Index ).Select( bone => bone.Parent?.Index ?? -1 ).ToArray();
+		var count = _positions.Length;
+		if ( _boneParents is null || _boneParents.Length != count )
+			return;
+		if ( _settled is null || _settled.Positions.Length != count )
+			_settled = new SkeletonPose( count );
+		if ( Time.Now - _settledAt > SettleGap )
+			_shownFollow.Reset();
+		_settledAt = Time.Now;
+		for ( var bone = 0; bone < count; bone++ )
+		{
+			var parent = _boneParents[ bone ];
+			if ( parent >= bone )
+				return;
+			if ( parent < 0 )
+			{
+				_settled.Positions[ bone ] = _positions[ bone ] / SkateUnits.InchesPerMetre;
+				_settled.Rotations[ bone ] = System.Numerics.Quaternion.Normalize( _rotations[ bone ] );
+				continue;
+			}
+			var undo = System.Numerics.Quaternion.Conjugate( System.Numerics.Quaternion.Normalize( _rotations[ parent ] ) );
+			_settled.Positions[ bone ] = System.Numerics.Vector3.Transform( _positions[ bone ] - _positions[ parent ], undo )
+				/ SkateUnits.InchesPerMetre;
+			_settled.Rotations[ bone ] = System.Numerics.Quaternion.Normalize( undo * _rotations[ bone ] );
+		}
+		var hand = mirror ? _mirroredCarryHand : _carryHand;
+		Transform? handBefore = hand >= 0 && CarriedBoardPose is not null ? HandOnModel( model, hand ) : null;
+		_shownFollow.Apply( _settled, delta );
+		for ( var bone = 0; bone < count; bone++ )
+		{
+			var parent = _boneParents[ bone ];
+			var place = _settled.Positions[ bone ] * SkateUnits.InchesPerMetre;
+			if ( parent < 0 )
+			{
+				_positions[ bone ] = place;
+				_rotations[ bone ] = _settled.Rotations[ bone ];
+				continue;
+			}
+			_positions[ bone ] = _positions[ parent ] + System.Numerics.Vector3.Transform( place, _rotations[ parent ] );
+			_rotations[ bone ] = System.Numerics.Quaternion.Normalize( _rotations[ parent ] * _settled.Rotations[ bone ] );
+		}
+		if ( handBefore is { } before && CarriedBoardPose is { } carried )
+		{
+			var moved = HandOnModel( model, hand ).ToWorld( before.ToLocal( carried ) );
+			if ( Finite( moved ) )
+				CarriedBoardPose = moved;
+		}
+	}
+
+	// A bone's place and turn in the world, as the model shows it.
+	private Transform HandOnModel( Transform model, int bone ) =>
+		new( model.PointToWorld( SkateUnits.ToEngine( _positions[ bone ] ) ), model.Rotation * SkateUnits.ToEngine( _rotations[ bone ] ) );
 
 	// The clip whose hand streams pose the fingers, and how far into it the body is: the state graph's own, or a
 	// requested motion timed from when it started.
@@ -3389,7 +3470,13 @@ internal sealed class ClipRiderAnimation
 		// It locks on touching down and lets go only once clearly lifted, so a gap hovering at the edge does not keep
 		// re-locking it. It takes full hold at once, exactly where the foot is shown at that moment (which a lock still
 		// letting go may hold partly), so taking hold stops the foot without moving it.
-		if ( grounded && gap <= LockGap && !_locked[ index ] )
+		// A braking foot drags over the ground with the board rather than standing where it touched down: locked there like a
+		// pushing foot, it was held behind as the board rolled on, the leg ran past its reach, and the foot hung 3 in over
+		// the ground through the whole brake.
+		var dragging = State?.Contains( ".Brake." ) == true;
+		if ( dragging )
+			_locked[ index ] = false;
+		if ( grounded && gap <= LockGap && !_locked[ index ] && !dragging )
 		{
 			_locked[ index ] = true;
 			_lockPoint[ index ] = Vector3.Lerp( target, _lockPoint[ index ].WithZ( target.z ), _lock[ index ] );
@@ -3408,6 +3495,14 @@ internal sealed class ClipRiderAnimation
 			_lock[ index ] = MathX.Lerp( _lock[ index ], 0f, 1f - MathF.Exp( -LockRelease * delta ) );
 		if ( _lock[ index ] > 0.001f )
 			target = Vector3.Lerp( target, lockedAt, _lock[ index ] );
+		// How far past the leg's soft reach the ground is under a foot being put down: the rider is lowered by as much.
+		if ( grounded && _plant[ index ] < -0.01f )
+		{
+			var hip = model.PointToWorld( SkateUnits.ToEngine( _positions[ foot.Leg.Upper ] ) );
+			var length = SkateUnits.ToEngine( _positions[ foot.Leg.Lower ] - _positions[ foot.Leg.Upper ] ).Length
+				+ SkateUnits.ToEngine( _positions[ foot.Ankle ] - _positions[ foot.Leg.Lower ] ).Length;
+			_groundShort = MathF.Max( _groundShort, hip.Distance( target ) - length * SoftReach );
+		}
 		target = SoftenReach( foot, model, target );
 		if ( (target - ankle).Length < 0.01f )
 			return;
