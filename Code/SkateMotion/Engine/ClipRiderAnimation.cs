@@ -546,7 +546,10 @@ internal sealed class ClipRiderAnimation
 			_handling = new BoardHandlingAnimationLayer( assets.Clips.RawPoses, assets.Graph );
 		_anchor = string.IsNullOrEmpty( assets.Graph.AnchorBone ) ? -1 : assets.Clips.Skeleton.IndexOf( assets.Graph.AnchorBone );
 		if ( _states is not null )
+		{
 			_states.Board = _anchor;
+			_states.Legs = StanceBones.Legs( assets.Clips.Skeleton );
+		}
 		_fit = new RiderBoardFit( assets.Graph.Board );
 		var bones = renderer.Model.Bones.AllBones.OrderBy( bone => bone.Index ).ToArray();
 		var names = bones.Select( bone => bone.Name ).ToArray();
@@ -794,6 +797,8 @@ internal sealed class ClipRiderAnimation
 		else if ( _states is not null )
 		{
 			_riderFacts.Fill( _facts, stance, stanceMirror, delta );
+			// Given here as well as at construction: a player made before a reload added them has none.
+			_states.Legs ??= StanceBones.Legs( _clipSet.Skeleton );
 			_states.Update( _facts, _parameters, delta, _statePose );
 		}
 		var requested = !graphed || _director.Requesting;

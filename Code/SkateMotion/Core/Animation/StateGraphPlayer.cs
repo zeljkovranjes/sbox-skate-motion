@@ -117,6 +117,18 @@ internal sealed class StateGraphPlayer
 	/// </summary>
 	internal int Board { get; set; } = -1;
 
+	/// <summary>
+	/// The bones the rider stands on the board with (the hips and the legs, <see cref="StanceBones.Legs"/>), or null. A
+	/// change that takes the board over to its other end (a half spin caught) eases these out from rest rather than from
+	/// the speed they had: in the clip left they were following the board round, and the board plays its spin out on its
+	/// own, so their speed carried on into the clip after it swung the feet 6-10 inches off the deck's side as a varial
+	/// kickflip, an inward heelflip or a shove-it landed.
+	/// </summary>
+	internal int[] Legs { get; set; }
+
+	// Set as a change takes the board over to its other end (see CaptureOffsets).
+	private bool _caughtOtherEnd;
+
 	// A half turn about a bone's own up (Z), and how near (radians) the board shown turned so must come to the new clip's
 	// board for it to be taken that way round: a third of a half turn, so a board held across the rider (a shifty, a board
 	// adjust, at 90-120 degrees) still goes back the way it came.
@@ -136,10 +148,14 @@ internal sealed class StateGraphPlayer
 	private void CaptureOffsets( float speed, AnimationParameters parameters )
 	{
 		var widest = 0f;
+		_caughtOtherEnd = false;
 		for ( var bone = 0; bone < _offsetRotations.Length; bone++ )
 		{
 			if ( bone == Board && Between( _from.Rotations[ bone ] * HalfTurn, _scratch.Rotations[ bone ] ) < OtherEnd )
+			{
 				_from.Rotations[ bone ] = Quaternion.Normalize( _from.Rotations[ bone ] * HalfTurn );
+				_caughtOtherEnd = true;
+			}
 			_offsetPositions[ bone ] = _from.Positions[ bone ] - _scratch.Positions[ bone ];
 			var offset = Quaternion.Normalize( _from.Rotations[ bone ] * Quaternion.Conjugate( Quaternion.Normalize( _scratch.Rotations[ bone ] ) ) );
 			_offsetRotations[ bone ] = offset.W < 0f ? Quaternion.Negate( offset ) : offset;
@@ -233,6 +249,17 @@ internal sealed class StateGraphPlayer
 			_lagPositions[ bone ] = Lag( move, _shownPositionRates[ bone ] );
 			var shown = Vector3.Transform( _shownTurnRates[ bone ], Quaternion.Conjugate( _offsetRotations[ bone ] ) );
 			_lagTurns[ bone ] = Lag( turn, shown );
+		}
+		// A half spin caught: the legs start the new clip from rest (see Legs).
+		if ( _caughtOtherEnd && Legs is { } legs )
+		{
+			foreach ( var bone in legs )
+			{
+				if ( bone < 0 || bone >= _offsetPositionRates.Length )
+					continue;
+				_offsetPositionRates[ bone ] = Vector3.Zero;
+				_offsetTurnRates[ bone ] = Vector3.Zero;
+			}
 		}
 		_lagTime = 0f;
 		_lagLength = Math.Min( _fadeTime, MinimumBlend );
