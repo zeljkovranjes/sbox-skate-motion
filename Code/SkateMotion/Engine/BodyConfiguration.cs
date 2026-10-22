@@ -37,7 +37,10 @@ internal sealed class BodyConfiguration
 		_body.AngularDamping = 0f;
 		_body.EnhancedCcd = true;
 		_body.CollisionEventsEnabled = true;
-		foreach ( var shape in _body.PhysicsBody.Shapes )
+		// A body already let go of its physics (its board being destroyed under its rider) has no shapes left to set.
+		if ( _body.PhysicsBody is not { } physics )
+			return;
+		foreach ( var shape in physics.Shapes )
 		{
 			var saved = false;
 			foreach ( var entry in _shapes )
