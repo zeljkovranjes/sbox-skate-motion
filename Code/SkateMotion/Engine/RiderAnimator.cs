@@ -94,9 +94,8 @@ internal sealed class RiderAnimator
 		return _plantPart < PlantOut ? "out" : null;
 	}
 	private string _catchStyle;
-	private string _lateTrick;
+	private readonly LateFlick _late = new();
 	private bool _lateArmed;
-	private float _lateTime;
 	private bool _hippy;
 	private float _airTime;
 	private float _takeoffYaw;
@@ -303,7 +302,7 @@ internal sealed class RiderAnimator
 		_trickNose = false;
 		_landingKind = LandingKind( BoardShown.Rotation, _lastVelocity, _takeoffYaw );
 		_trick = SkateTrick.None;
-		_lateTrick = null;
+		_late.Clear();
 		_sinceLanding = 0f;
 		_landingSpeed = speed;
 	}
@@ -422,7 +421,7 @@ internal sealed class RiderAnimator
 			Grab = LetGoForLanding( airborne, timeToLand, input.Grab != SkateAirGrab.None ) ? null : GrabName( input.Grab ),
 			TimeToLand = timeToLand,
 			Plant = _plant,
-			LateTrick = _lateTrick,
+			LateTrick = _late.Trick,
 			LateBackFoot = _lateBack,
 			LateFrontside = _lateFrontside,
 			CatchStyle = landed ? _catchStyle : null,
@@ -509,12 +508,11 @@ internal sealed class RiderAnimator
 		_fallSpeed = fallSpeed;
 	}
 
-	// A full flick in the air (pull back, then forward) plays a late trick; the board's physics is unchanged.
+	// A full flick in the air (pull back, then forward) plays a late trick, once (LateFlick); the board's physics is
+	// unchanged.
 	private void TrackLateTrick( SkateInput input, bool airborne, float delta )
 	{
-		_lateTime = MathF.Max( 0f, _lateTime - delta );
-		if ( _lateTime <= 0f )
-			_lateTrick = null;
+		_late.Step( LateFlick.Shows( ClipState ), input.FlickY, delta );
 		if ( !airborne || _sincePop < 0.3f )
 		{
 			_lateArmed = false;
@@ -524,7 +522,7 @@ internal sealed class RiderAnimator
 		// Flicked to a side it flips (a kickflip or heelflip for the stance); straight, it shoves the board round the
 		// way the stick swept on the way.
 		var stance = input.Goofy ? -1f : 1f;
-		if ( MathF.Abs( input.FlickY ) > 0.65f && !_lateArmed )
+		if ( MathF.Abs( input.FlickY ) > 0.65f && !_lateArmed && _late.MayArm )
 		{
 			_lateArmed = true;
 			_lateBack = input.FlickY > 0f;
@@ -534,9 +532,8 @@ internal sealed class RiderAnimator
 		{
 			_lateArmed = false;
 			var side = input.FlickX * stance;
-			_lateTrick = side < -0.3f ? "kickflip" : side > 0.3f ? "heelflip" : _highPop ? "shuvit-high" : "shuvit-low";
+			_late.Flick( side < -0.3f ? "kickflip" : side > 0.3f ? "heelflip" : _highPop ? "shuvit-high" : "shuvit-low" );
 			_lateFrontside = _lateSweep * stance > 0f;
-			_lateTime = 0.6f;
 		}
 		if ( _lateArmed && MathF.Abs( input.FlickX ) > MathF.Abs( _lateSweep ) )
 			_lateSweep = input.FlickX;
