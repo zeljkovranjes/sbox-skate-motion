@@ -197,7 +197,7 @@ internal sealed class RiderMotor
 		else
 		{
 			_walker.ApplyFriction( 0.1f, 140f );
-			_walker.Accelerate( wish );
+			_walker.Accelerate( AlongSteep( wish ) );
 		}
 		if ( jump && _walker.IsOnGround )
 		{
@@ -206,7 +206,13 @@ internal sealed class RiderMotor
 		}
 		_walker.Velocity += Vector3.Down * (Gravity * SkateUnits.InchesPerMetre * delta);
 		var before = _rider.WorldPosition;
+		var grounded = _walker.IsOnGround;
 		_walker.Move();
+		// Climbing onto a surface too steep to stand on, the body loses the ground with the slope's upward speed: it is on
+		// or against the steep face, not thrown off a lip, and keeps none of it (run up a kicker it hopped off its curve at
+		// 91 in/s again and again).
+		if ( grounded && !_walker.IsOnGround && _walker.Velocity.z > 0f && SteepAhead( _walker.Velocity.WithZ( 0f ) ) )
+			_walker.Velocity = _walker.Velocity.WithZ( 0f );
 		Unwedge( before );
 		_flying = Airborne;
 		MeasureGround( delta );
@@ -224,6 +230,38 @@ internal sealed class RiderMotor
 			_rider.WorldRotation = Rotation.FromYaw( current + change );
 		}
 	}
+
+	// Inches from the body a surface too steep to stand on is looked for: the way it goes or is pushed, or under it.
+	private const float SteepReach = 4f;
+
+	// In the air the stick pushes the body along a surface too steep to stand on rather than into it: pushed on into a
+	// kicker's steepening curve after leaving it, the slide along the curve turned the push into climbing, and a run
+	// (170 in/s) left the kicker at 91 in/s upward and went on rising to 254, 126 in high.
+	private Vector3 AlongSteep( Vector3 wish )
+	{
+		if ( wish.LengthSquared < 1f )
+			return wish;
+		var hit = _walker.TraceDirection( wish.Normal * SteepReach );
+		if ( !hit.Hit || hit.StartedSolid || Vector3.GetAngle( Vector3.Up, hit.Normal ) <= _walker.GroundAngle )
+			return wish;
+		var away = hit.Normal.WithZ( 0f );
+		if ( away.LengthSquared < 1e-4f )
+			return wish;
+		away = away.Normal;
+		var into = Vector3.Dot( wish, away );
+		return into < 0f ? wish - away * into : wish;
+	}
+
+	// Whether a surface too steep to stand on is within SteepReach of the body, under it or the way it goes.
+	private bool SteepAhead( Vector3 way )
+	{
+		if ( Steep( _walker.TraceDirection( Vector3.Down * SteepReach ) ) )
+			return true;
+		return way.LengthSquared >= 1f && Steep( _walker.TraceDirection( way.Normal * SteepReach ) );
+	}
+
+	private bool Steep( SceneTraceResult hit ) =>
+		hit.Hit && !hit.StartedSolid && Vector3.GetAngle( Vector3.Up, hit.Normal ) > _walker.GroundAngle;
 
 	// Responsive walking on the ground: the way it goes turns toward the stick at ResponsiveSteer keeping its speed, and
 	// the speed goes to the stick's at ResponsiveStart or ResponsiveStop, so a turn never slows it into a stop.
