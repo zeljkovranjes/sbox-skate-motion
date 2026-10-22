@@ -24,6 +24,7 @@ internal sealed class BoardVisuals
 	private bool _restCaptured;
 	private readonly bool _generatedDeck;
 	private readonly GameObject[] _baseplates = new GameObject[ 2 ];
+	private readonly Transform[] _plateRest = new Transform[ 2 ];
 
 	// A board model taken apart, and where it is drawn whole instead, the bone moving each part and that bone's place on
 	// the part.
@@ -82,6 +83,8 @@ internal sealed class BoardVisuals
 					-0.011f * SkateUnits.InchesPerMetre );
 			}
 		}
+		for ( var i = 0; i < 2; i++ )
+			_plateRest[ i ] = _baseplates[ i ].IsValid() ? _baseplates[ i ].LocalTransform : Transform.Zero;
 		if ( skinned )
 			PlaceBones();
 	}
@@ -129,14 +132,11 @@ internal sealed class BoardVisuals
 	// off the wheels as it goes (Rise), as if on risers.
 	private const float TiltPastRoom = 1.6f;
 
-	// The furthest a rigid board (both trucks bolted to its deck) leans, radians, eased into (Roll): a full carve at riding
-	// speed takes it to 8 degrees. It leans whole, wheels and all, onto the edge of the wheels on the side it dips to, its
-	// other wheels lifting off the ground.
-	private const float RigidLean = 0.168f;
-
-	// Whether the board leans as one rigid piece: its trucks are both bolted to the deck (a hinge holds its wheels as
-	// fixed as the deck), so a deck leaning on its own would pull the axles out of the wheels on the ground.
-	private bool Rigid => Bolted( 0 ) && Bolted( 1 ) && _restCaptured;
+	// Whether the board is hinged: its trucks are both bolted to the deck (a hinge holds its wheels as fixed as the deck),
+	// so they could not lean with the deck without pulling the axles out of the wheels on the ground. Only its deck
+	// leans, as far as its wheels leave it room (BoardRig.LeanLimit) and never rising off its hinges; their leaves stay
+	// round their axles, and trucks and wheels are held where the model has them, level with the ground under it.
+	private bool Hinged => Bolted( 0 ) && Bolted( 1 ) && _restCaptured;
 
 	/// <summary>
 	/// How far the deck dips into the current turn (radians, positive: its left side down): on a board whose wheels sit
@@ -148,19 +148,19 @@ internal sealed class BoardVisuals
 		get
 		{
 			var roll = _lean.Roll;
-			var limit = Rigid ? RigidLean : _rig.LeanLimit * TiltPastRoom;
+			var limit = Hinged ? _rig.LeanLimit : _rig.LeanLimit * TiltPastRoom;
 			return limit >= DeckLean.MaximumRoll ? roll : limit > 0f ? limit * MathF.Tanh( roll / limit ) : 0f;
 		}
 	}
 
 	// How far (inches) the deck rises off its wheels at a lean past the room they leave it: enough that its underside
-	// clears the farthest of them under it (a rigid board leans whole and never rises off them).
-	private float Rise( float roll ) => !Rigid && _rig.LeanLimit is var limit && float.IsFinite( limit )
+	// clears the farthest of them under it (a hinged board's deck leans no further than their room).
+	private float Rise( float roll ) => !Hinged && _rig.LeanLimit is var limit && float.IsFinite( limit )
 		? MathF.Max( 0f, MathF.Abs( roll ) - limit ) * _rig.WheelReach : 0f;
 
 	/// <summary>
 	/// A deck pose dipped by the deck's lean: about the line through the trucks' pivots under it, risen off its wheels as
-	/// far as a lean past their room needs; or, a rigid board's, about the outer edge of the wheels it leans onto.
+	/// far as a lean past their room needs.
 	/// </summary>
 	internal Transform Leaned( Transform deck )
 	{
@@ -168,29 +168,8 @@ internal sealed class BoardVisuals
 		if ( roll == 0f )
 			return deck;
 		var turn = Rotation.FromAxis( Vector3.Forward, -roll * (180f / MathF.PI) );
-		if ( Rigid )
-		{
-			var edge = EdgeUnder( roll );
-			return deck.ToWorld( new Transform( edge - turn * edge, turn ) );
-		}
 		var pivot = Vector3.Down * _rig.PivotDepth;
 		return deck.ToWorld( new Transform( pivot - turn * pivot + Vector3.Up * Rise( roll ), turn ) );
-	}
-
-	// Where a rigid board leaning by roll rests (inches, in the deck's frame): on the ground under the outer edges of the
-	// wheels on the side it dips to (its left, leaning a positive roll).
-	private Vector3 EdgeUnder( float roll )
-	{
-		var out_ = 0f;
-		var down = 0f;
-		var half = (_rig.Parts?.Layout.WheelWidth ?? 0f) * 0.5f * SkateUnits.InchesPerMetre;
-		var radius = _radius * SkateUnits.InchesPerMetre;
-		for ( var i = 0; i < 4; i++ )
-		{
-			out_ += (MathF.Abs( _wheelRest[ i ].Position.y ) + half) * 0.25f;
-			down += (_wheelRest[ i ].Position.z - radius) * 0.25f;
-		}
-		return new Vector3( 0f, roll > 0f ? out_ : -out_, down );
 	}
 
 	// A wheel's spin about its own axle (the board's left in its rest frame).
@@ -281,10 +260,10 @@ internal sealed class BoardVisuals
 			if ( (part.IsValid() ? part.Components.Get<ModelRenderer>()?.Model : null) is { } model )
 				yield return (model, rest);
 		}
-		foreach ( var plate in _baseplates )
+		for ( var i = 0; i < 2; i++ )
 		{
-			if ( (plate.IsValid() ? plate.Components.Get<ModelRenderer>()?.Model : null) is { } model )
-				yield return (model, plate.LocalTransform);
+			if ( (_baseplates[ i ].IsValid() ? _baseplates[ i ].Components.Get<ModelRenderer>()?.Model : null) is { } model )
+				yield return (model, _plateRest[ i ]);
 		}
 	}
 
@@ -393,20 +372,21 @@ internal sealed class BoardVisuals
 		var deckPose = Blend( Leaned( shown ) );
 		// A truck bolted to the deck leans with it, and its wheels tilt with it, staying on the ground; the wheels never come
 		// closer to the deck than the room its lean leaves them.
-		// A rigid board's wheels lean with it, on its deck, never nearer the deck than they were built.
+		// A hinged board's trucks and wheels stay where the model has them under the level deck, on the ground, while its
+		// deck leans and rises above them.
 		var tilt = deckPose.Rotation * Blend( shown ).Rotation.Inverse;
-		var rigid = Rigid;
-		var rise = rigid ? 0f : WheelRise();
+		var hinged = Hinged;
+		var rise = hinged ? 0f : WheelRise();
 		for ( var i = 0; i < 4; i++ )
 		{
-			wheels[ i ] = simulated ? Part( wheels[ i ], _wheelRest[ i ], i, true, rise, rigid, rigid ) : deckPose.ToWorld( _wheelRest[ i ] );
-			if ( simulated && !rigid && Bolted( i / 2 ) )
+			wheels[ i ] = simulated ? Part( wheels[ i ], _wheelRest[ i ], i, true, rise, held: hinged ) : deckPose.ToWorld( _wheelRest[ i ] );
+			if ( simulated && !hinged && Bolted( i / 2 ) )
 				wheels[ i ] = wheels[ i ].WithRotation( tilt * wheels[ i ].Rotation );
 			wheels[ i ] = wheels[ i ].WithRotation( wheels[ i ].Rotation * Spin( i ) );
 		}
 		for ( var i = 0; i < 2; i++ )
 			trucks[ i ] = !simulated ? deckPose.ToWorld( _truckRest[ i ] )
-				: Bolted( i ) ? Part( trucks[ i ], _truckRest[ i ], 4 + i, true, 0f, true, rigid )
+				: Bolted( i ) ? Part( trucks[ i ], _truckRest[ i ], 4 + i, true, 0f, !hinged, hinged )
 				: Part( trucks[ i ], _truckRest[ i ], 4 + i, true );
 		// A nose or tail slide's board is shown pitched up off the rail toward its middle (see SlideTip and UpdateTip).
 		UpdateTip( deckPose, rails );
@@ -418,6 +398,17 @@ internal sealed class BoardVisuals
 			for ( var i = 0; i < 2; i++ )
 				trucks[ i ] = SlideTip.About( trucks[ i ], _tipPivot, _tipTurn );
 		}
+		// A baseplate is fixed under the deck and leans with it; a hinged board's (a hinge's leaf) stays on its truck, round
+		// the axle it hinges on, while the deck leans over it.
+		var hingedPlates = Hinged && _deck.IsValid();
+		var plates = new Transform[ 2 ];
+		for ( var i = 0; i < 2; i++ )
+		{
+			if ( !_baseplates[ i ].IsValid() || !_deck.IsValid() )
+				continue;
+			var onDeck = _deck.LocalTransform.ToWorld( _plateRest[ i ] );
+			plates[ i ] = hingedPlates ? trucks[ i ].ToWorld( _truckRest[ i ].ToLocal( onDeck ) ) : deckPose.ToWorld( onDeck );
+		}
 		// Once lifted onto a rail the board stays on top of it, however deep an animation then sinks it; so does a board
 		// coming down onto one, its trucks just above the rail's top: an animated board held lower than the physical one
 		// (a dark catch's) rises with it onto the rail as it lands, rather than sinking in and being thrown out at the grind.
@@ -427,10 +418,10 @@ internal sealed class BoardVisuals
 		// It may rise as far as it sits below the physical board, which physics keeps on the rail: a long board's clip board
 		// handed back at a slide's lock-on sat up to 6 in below it, deeper than MaximumLift.
 		var most = MathF.Max( RailClearance.MaximumLift, Vector3.Dot( deck.Position - deckPose.Position, Vector3.Up ) + 1f );
-		var needed = rails is { Count: > 0 } ? RailClearance.Lift( rails, Drawn( deckPose, wheels, trucks ), resting, most ) : Vector3.Zero;
+		var needed = rails is { Count: > 0 } ? RailClearance.Lift( rails, Drawn( deckPose, wheels, trucks, plates ), resting, most ) : Vector3.Zero;
 		// A board shown on its back or side is kept out of the ground under it the same way: dark side up a deck rests on
 		// its kicked nose and tail, which reach below its flat middle (FloorClearance).
-		var floor = FloorClearance.Lift( _board, deckPose, Drawn( deckPose, wheels, trucks ) );
+		var floor = FloorClearance.Lift( _board, deckPose, Drawn( deckPose, wheels, trucks, plates ) );
 		if ( floor.LengthSquared > needed.LengthSquared )
 			needed = floor;
 		// Settling back down follows a critically damped spring from rest (LiftRelease its rate), so it starts and stops
@@ -465,6 +456,8 @@ internal sealed class BoardVisuals
 		{
 			if ( _trucks[ i ].IsValid() )
 				_trucks[ i ].WorldTransform = Lifted( trucks[ i ] );
+			if ( _baseplates[ i ].IsValid() && _deck.IsValid() )
+				_baseplates[ i ].WorldTransform = Lifted( plates[ i ] );
 		}
 		if ( _skinned.IsValid() )
 			MoveBones( wheels, trucks );
@@ -596,7 +589,8 @@ internal sealed class BoardVisuals
 	private Transform Lifted( Transform pose ) => _lift == Vector3.Zero ? pose : pose.WithPosition( pose.Position + _lift );
 
 	// Each drawn part's model at the pose it is about to be shown at.
-	private ReadOnlySpan<(Model Model, Transform Pose)> Drawn( Transform deck, Transform[] wheels, Transform[] trucks )
+	private ReadOnlySpan<(Model Model, Transform Pose)> Drawn( Transform deck, Transform[] wheels, Transform[] trucks,
+		Transform[] plates )
 	{
 		var count = 0;
 		if ( _deck.IsValid() )
@@ -614,8 +608,7 @@ internal sealed class BoardVisuals
 		for ( var i = 0; i < 2; i++ )
 		{
 			if ( _baseplates[ i ].IsValid() && _deck.IsValid() )
-				_drawn[ count++ ] = (_baseplates[ i ].Components.Get<ModelRenderer>()?.Model,
-					deck.ToWorld( _deck.LocalTransform ).ToWorld( _baseplates[ i ].LocalTransform ));
+				_drawn[ count++ ] = (_baseplates[ i ].Components.Get<ModelRenderer>()?.Model, plates[ i ]);
 		}
 		if ( _skinned.IsValid() )
 			_drawn[ count++ ] = (_parts.Source, deck.ToWorld( _parts.Placement ));
@@ -662,7 +655,7 @@ internal sealed class BoardVisuals
 	}
 
 	// A part rises toward the deck at most rise inches above its rest place, and a held one stays at its rest height (a
-	// rigid board's wheels and trucks); a leaned one is placed on the leaned deck.
+	// hinged board's wheels and trucks); a leaned one is placed on the leaned deck.
 	private Transform Part( Transform physical, Transform rest, int slot, bool turn, float rise = float.PositiveInfinity,
 		bool leaned = false, bool held = false )
 	{
