@@ -129,6 +129,14 @@ internal sealed class BoardVisuals
 	// off the wheels as it goes (Rise), as if on risers.
 	private const float TiltPastRoom = 1.6f;
 
+	// The furthest a rigid board (both trucks bolted to its deck) leans, radians (6 degrees): whole, wheels and all, onto
+	// the edge of the wheels on the side it dips to, its other wheels lifting off the ground.
+	private const float RigidLean = 0.105f;
+
+	// Whether the board leans as one rigid piece: its trucks are both bolted to the deck (a hinge holds its wheels as
+	// fixed as the deck), so a deck leaning on its own would pull the axles out of the wheels on the ground.
+	private bool Rigid => Bolted( 0 ) && Bolted( 1 ) && _restCaptured;
+
 	/// <summary>
 	/// How far the deck dips into the current turn (radians, positive: its left side down): on a board whose wheels sit
 	/// close under the deck, no further than <see cref="TiltPastRoom"/> times the room they leave it, easing into that
@@ -139,19 +147,19 @@ internal sealed class BoardVisuals
 		get
 		{
 			var roll = _lean.Roll;
-			var limit = _rig.LeanLimit * TiltPastRoom;
+			var limit = Rigid ? RigidLean : _rig.LeanLimit * TiltPastRoom;
 			return limit >= DeckLean.MaximumRoll ? roll : limit > 0f ? limit * MathF.Tanh( roll / limit ) : 0f;
 		}
 	}
 
 	// How far (inches) the deck rises off its wheels at a lean past the room they leave it: enough that its underside
-	// clears the farthest of them under it.
-	private float Rise( float roll ) => _rig.LeanLimit is var limit && float.IsFinite( limit )
+	// clears the farthest of them under it (a rigid board leans whole and never rises off them).
+	private float Rise( float roll ) => !Rigid && _rig.LeanLimit is var limit && float.IsFinite( limit )
 		? MathF.Max( 0f, MathF.Abs( roll ) - limit ) * _rig.WheelReach : 0f;
 
 	/// <summary>
-	/// A deck pose dipped by the deck's lean, about the line through the trucks' pivots under it, and risen off its wheels
-	/// as far as a lean past their room needs.
+	/// A deck pose dipped by the deck's lean: about the line through the trucks' pivots under it, risen off its wheels as
+	/// far as a lean past their room needs; or, a rigid board's, about the outer edge of the wheels it leans onto.
 	/// </summary>
 	internal Transform Leaned( Transform deck )
 	{
@@ -159,8 +167,29 @@ internal sealed class BoardVisuals
 		if ( roll == 0f )
 			return deck;
 		var turn = Rotation.FromAxis( Vector3.Forward, -roll * (180f / MathF.PI) );
+		if ( Rigid )
+		{
+			var edge = EdgeUnder( roll );
+			return deck.ToWorld( new Transform( edge - turn * edge, turn ) );
+		}
 		var pivot = Vector3.Down * _rig.PivotDepth;
 		return deck.ToWorld( new Transform( pivot - turn * pivot + Vector3.Up * Rise( roll ), turn ) );
+	}
+
+	// Where a rigid board leaning by roll rests (inches, in the deck's frame): on the ground under the outer edges of the
+	// wheels on the side it dips to (its left, leaning a positive roll).
+	private Vector3 EdgeUnder( float roll )
+	{
+		var out_ = 0f;
+		var down = 0f;
+		var half = (_rig.Parts?.Layout.WheelWidth ?? 0f) * 0.5f * SkateUnits.InchesPerMetre;
+		var radius = _radius * SkateUnits.InchesPerMetre;
+		for ( var i = 0; i < 4; i++ )
+		{
+			out_ += (MathF.Abs( _wheelRest[ i ].Position.y ) + half) * 0.25f;
+			down += (_wheelRest[ i ].Position.z - radius) * 0.25f;
+		}
+		return new Vector3( 0f, roll > 0f ? out_ : -out_, down );
 	}
 
 	// A wheel's spin about its own axle (the board's left in its rest frame).
@@ -353,18 +382,20 @@ internal sealed class BoardVisuals
 		var deckPose = Blend( Leaned( shown ) );
 		// A truck bolted to the deck leans with it, and its wheels tilt with it, staying on the ground; the wheels never come
 		// closer to the deck than the room its lean leaves them.
+		// A rigid board's wheels lean with it, on its deck, never nearer the deck than they were built.
 		var tilt = deckPose.Rotation * Blend( shown ).Rotation.Inverse;
-		var rise = WheelRise();
+		var rigid = Rigid;
+		var rise = rigid ? 0f : WheelRise();
 		for ( var i = 0; i < 4; i++ )
 		{
-			wheels[ i ] = simulated ? Part( wheels[ i ], _wheelRest[ i ], i, true, rise ) : deckPose.ToWorld( _wheelRest[ i ] );
-			if ( simulated && Bolted( i / 2 ) )
+			wheels[ i ] = simulated ? Part( wheels[ i ], _wheelRest[ i ], i, true, rise, rigid, rigid ) : deckPose.ToWorld( _wheelRest[ i ] );
+			if ( simulated && !rigid && Bolted( i / 2 ) )
 				wheels[ i ] = wheels[ i ].WithRotation( tilt * wheels[ i ].Rotation );
 			wheels[ i ] = wheels[ i ].WithRotation( wheels[ i ].Rotation * Spin( i ) );
 		}
 		for ( var i = 0; i < 2; i++ )
 			trucks[ i ] = !simulated ? deckPose.ToWorld( _truckRest[ i ] )
-				: Bolted( i ) ? Part( trucks[ i ], _truckRest[ i ], 4 + i, true, 0f, true )
+				: Bolted( i ) ? Part( trucks[ i ], _truckRest[ i ], 4 + i, true, 0f, true, rigid )
 				: Part( trucks[ i ], _truckRest[ i ], 4 + i, true );
 		// A nose or tail slide's board is shown pitched up off the rail toward its middle (see SlideTip and UpdateTip).
 		UpdateTip( deckPose, rails );
@@ -619,15 +650,16 @@ internal sealed class BoardVisuals
 		return offset.Length > PartSlack ? local.WithPosition( rest.Position + offset.Normal * PartSlack ) : local;
 	}
 
-	// A part rises toward the deck at most rise inches above its rest place; a leaned one is placed on the leaned deck.
+	// A part rises toward the deck at most rise inches above its rest place, and a held one stays at its rest height (a
+	// rigid board's wheels and trucks); a leaned one is placed on the leaned deck.
 	private Transform Part( Transform physical, Transform rest, int slot, bool turn, float rise = float.PositiveInfinity,
-		bool leaned = false )
+		bool leaned = false, bool held = false )
 	{
 		var local = PartOnDeck( _board.WorldTransform, physical, rest );
 		var stepped = _partSteps[ slot ].At( local, Time.Now );
 		local = new Transform( stepped.Position, turn ? stepped.Rotation : local.Rotation, local.Scale );
-		if ( local.Position.z > rest.Position.z + rise )
-			local = local.WithPosition( local.Position.WithZ( rest.Position.z + rise ) );
+		if ( local.Position.z > rest.Position.z + rise || held )
+			local = local.WithPosition( local.Position.WithZ( held ? rest.Position.z : rest.Position.z + rise ) );
 		if ( _displayWeight > 0f )
 			local = new Transform( Vector3.Lerp( local.Position, rest.Position, _displayWeight ),
 				Rotation.Slerp( local.Rotation, rest.Rotation, _displayWeight ), local.Scale );
