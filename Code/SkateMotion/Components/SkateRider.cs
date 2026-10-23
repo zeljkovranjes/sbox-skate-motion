@@ -1010,17 +1010,24 @@ public sealed class SkateRider : Component
 
 	// Another player's rider far from the camera is posed less often: from LodNear metres every second frame, then every
 	// fourth from twice that and every eighth from four times it, each pose covering the time since the last. A crowd of
-	// riders then costs about what a few near ones do; the player's own rider is posed every frame.
+	// riders then costs about what a few near ones do; the player's own rider is posed every frame. A rider in a trick (in
+	// the air, on a rail, or within TrickSettle seconds of coming down) is posed every frame however far: posed every
+	// eighth frame from 48 m, a flip was shown at 7.5 frames a second, its short clips stepped over, and it cut to the
+	// landing before it was seen to finish.
 	private const float LodNear = 12f;
+	private const float TrickSettle = 0.6f;
 	private int _lodFrame;
 	private float _lodDelta;
+	private float _sinceTrick = float.PositiveInfinity;
 
 	private bool PoseThisFrame( out float delta )
 	{
 		_lodDelta += Time.Delta;
 		delta = _lodDelta;
+		var tricking = Mode == SkateRiderMode.Riding && (Board.State.IsAirborne || Board.State.Grind != SkateGrind.None);
+		_sinceTrick = tricking ? 0f : _sinceTrick + Time.Delta;
 		var every = 1;
-		if ( IsProxy && Scene.Camera is { } camera )
+		if ( IsProxy && _sinceTrick > TrickSettle && Scene.Camera is { } camera )
 		{
 			var metres = camera.WorldPosition.Distance( WorldPosition ) / SkateUnits.InchesPerMetre;
 			every = metres < LodNear ? 1 : metres < LodNear * 2f ? 2 : metres < LodNear * 4f ? 4 : 8;
