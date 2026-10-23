@@ -18,7 +18,7 @@ internal static class LateLoad
 		var scene = Game.ActiveScene;
 		if ( !scene.IsValid() || scene.IsEditor )
 			return;
-		var ours = typeof( LateLoad ).Namespace.Split( '.' )[ 0 ] + ".";
+		const string ours = nameof( SkateMotion ) + ".";
 		foreach ( var missing in scene.Components.GetAll<MissingComponent>( FindMode.EverythingInSelfAndDescendants ).ToArray() )
 		{
 			var json = missing.GetJson();
