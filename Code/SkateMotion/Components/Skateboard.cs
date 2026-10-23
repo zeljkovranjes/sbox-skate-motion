@@ -422,10 +422,8 @@ public sealed class Skateboard : Component, IBoardDisplay
 
 	protected override void OnStart()
 	{
-		// Spawned from a package loaded into a game already running, the board's scene has none of its systems yet; and a
-		// player whose copy of the package is still loading gets the board without its code (LateLoad).
+		// Spawned from a package loaded into a game already running, the board's scene has none of its systems yet.
 		SceneSystems.Ensure( Scene );
-		LateLoad.Announce( Scene );
 		Build();
 	}
 
