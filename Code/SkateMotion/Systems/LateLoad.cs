@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Sandbox;
@@ -10,43 +9,59 @@ namespace SkateMotion.Systems;
 /// For a package whose code reaches a player after its objects did. Spawned from a spawn menu for the first time while a
 /// player was already in the game, the board arrived there before the package's code had loaded (it takes seconds): its
 /// components were held as missing, and stay so (the engine does not make them once their code is there), the board
-/// neither shown nor ridable there and its rider unable to find it. Once the code has loaded there, that player asks the
-/// host to send each of them again (Network.Refresh, the documented way to bring a networked object's components to the
-/// other players): they are made from it there, their synced values and calls wired in as any other's. The scene's
-/// systems, made as a scene starts, are made too.
+/// neither shown nor ridable there and its rider unable to find it. Nothing tells a player's code that it has just loaded
+/// (the hotloaded event does not reach code a package brings mid-game), so the host, which makes every such object with
+/// its code there, tells every other player to look a few times as one is made (<see cref="Announce"/>); a player holding
+/// components of this package as missing asks the host to send each again (Network.Refresh, the documented way to bring
+/// a networked object's components to the other players), and they are made from it there, their synced values and calls
+/// wired in as any other's.
 /// </summary>
 internal static class LateLoad
 {
-	// How often (seconds) and how many times, once the code has loaded, a player looks for components held as missing: an
-	// object on its way as the code loaded arrives just after it.
-	private const float Every = 0.5f;
-	private const int Looks = 20;
+	// Seconds between the host's reminders after an object of this package is made: a player's code can take from a
+	// moment to half a minute to load.
+	private static readonly float[] Reminders = { 1f, 1f, 2f, 4f, 8f, 16f };
 
-	[Event( "hotloaded" )]
-	private static void OnCodeLoaded()
+	/// <summary>Host: an object of this package was just made, which a player whose code is still loading got without it.</summary>
+	internal static void Announce( Scene scene )
 	{
-		var scene = Game.ActiveScene;
-		if ( !scene.IsValid() || scene.IsEditor )
-			return;
-		SceneSystems.Ensure( scene );
-		// The host made every object of this package with its code there; only another player can have got one first.
-		if ( Networking.IsActive && !Networking.IsHost )
-			_ = Watch( scene );
+		if ( Networking.IsActive && Networking.IsHost && scene.IsValid() && !scene.IsEditor )
+			_ = Remind( scene );
 	}
 
-	private static async Task Watch( Scene scene )
+	private static async Task Remind( Scene scene )
 	{
-		var asked = new HashSet<Guid>();
-		for ( var look = 0; look < Looks && scene.IsValid(); look++ )
+		foreach ( var wait in Reminders )
 		{
-			Ask( scene, asked );
-			await GameTask.DelaySeconds( Every );
+			await GameTask.DelaySeconds( wait );
+			if ( !scene.IsValid() )
+				return;
+			LookAgain();
 		}
 	}
 
-	// Asks the host, once, for each component of this package held as missing here, and lets each one's placeholder go
-	// once the host's has come.
-	private static void Ask( Scene scene, HashSet<Guid> asked )
+	/// <summary>Every other player: asks the host for any component of this package held as missing here.</summary>
+	[Rpc.Broadcast( NetFlags.HostOnly )]
+	public static void LookAgain()
+	{
+		var scene = Game.ActiveScene;
+		if ( Networking.IsHost || !scene.IsValid() || scene.IsEditor )
+			return;
+		SceneSystems.Ensure( scene );
+		Ask( scene );
+	}
+
+	// Where the hotloaded event does come (code changed while a game runs), the same look.
+	[Event( "hotloaded" )]
+	private static void OnCodeLoaded()
+	{
+		if ( Networking.IsActive && !Networking.IsHost )
+			LookAgain();
+	}
+
+	// Asks the host for each component of this package held as missing here, and lets each one's placeholder go once the
+	// host's has come.
+	private static void Ask( Scene scene )
 	{
 		const string ours = nameof( SkateMotion ) + ".";
 		foreach ( var missing in scene.Components.GetAll<MissingComponent>( FindMode.EverythingInSelfAndDescendants ).ToArray() )
@@ -57,7 +72,7 @@ internal static class LateLoad
 				continue;
 			if ( scene.Directory.FindComponentByGuid( id ).IsValid() )
 				missing.Destroy();
-			else if ( asked.Add( id ) )
+			else
 				SendAgain( id );
 		}
 	}
