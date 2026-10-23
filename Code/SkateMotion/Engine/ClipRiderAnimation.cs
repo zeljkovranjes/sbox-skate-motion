@@ -1019,6 +1019,7 @@ internal sealed class ClipRiderAnimation
 			HoldPlanted( i, model, mirror, !input.Airborne, State, delta );
 		}
 		TakeLegs( input, model, delta );
+		HoldStance( input, model, delta );
 		// The first frames after starting can carry a pose or board that is not real yet; the corrections wait for one.
 		if ( riding && Finite( model ) && Finite( boardShown ) && Finite( _positions[ 0 ] ) )
 		{
@@ -1770,6 +1771,64 @@ internal sealed class ClipRiderAnimation
 				continue;
 			_positions[ bone ] = System.Numerics.Vector3.Lerp( _positions[ bone ], at, weight );
 			_rotations[ bone ] = System.Numerics.Quaternion.Normalize( System.Numerics.Quaternion.Slerp( _rotations[ bone ], turn, weight ) );
+		}
+	}
+
+	// On foot, the feet the body stands on are held where they were put down, stepping over when the pose takes one
+	// further (see StanceLock), as the original holds a walking body's planted foot: the stock walk takes up a change
+	// of the body's speed a few frames late, and coming to a stop from a run the body stood still while its legs ran
+	// on, the feet sliding up to 340 in/s for a tenth of a second; stepping off the board into a run, the clip's
+	// planted foot swept 77-226 in/s across the ground under a body getting going at 35-76. Not while getting on (the
+	// clip steps up onto the deck), bailed, or landing, whose own hold keeps the feet it plants (see HoldPlanted). Both
+	// feet are held while both are down, where the original holds one only: here the body goes as the controls ask
+	// rather than as its legs carry it, and setting off from a stand, at a walking pace at once, slid both feet 3.5 in
+	// under it. A foot is planted while its ball is within StanceClearance (metres) of the ground the model stands on,
+	// its heel no more than HeelRise up, and it is held by its ball: a foot rolls off the ground over its ball, and let
+	// go as its heel began to rise, the ball of a walk's planted foot was swept 220-500 in/s across the ground as the
+	// walk handed over to a run.
+	private readonly StanceLock _stance = new();
+	private readonly System.Numerics.Vector3[] _stanceFree = new System.Numerics.Vector3[ 2 ];
+	private readonly System.Numerics.Vector3[] _stanceShown = new System.Numerics.Vector3[ 2 ];
+	private readonly bool[] _stancePlanted = new bool[ 2 ];
+	private const float StanceClearance = 0.02f;
+	private const float HeelRise = 0.06f;
+
+	/// <summary>On foot, how many feet are held where they were put down (see HoldStance).</summary>
+	internal int FeetHeld => _stance.Held;
+
+	private void HoldStance( in RiderAnimationInput input, Transform model, float delta )
+	{
+		var onFeet = _feet.Length == 2 && !input.Airborne && State?.Contains( ".Landing." ) != true
+			&& input.Activity is not (RiderActivity.Riding or RiderActivity.Mounting or RiderActivity.Bailed)
+			&& Finite( model ) && Finite( _positions[ 0 ] );
+		if ( !onFeet )
+		{
+			_stance.Reset();
+			return;
+		}
+		var clearance = StanceClearance * SkateUnits.InchesPerMetre;
+		var heelRise = HeelRise * SkateUnits.InchesPerMetre;
+		for ( var i = 0; i < 2; i++ )
+		{
+			var foot = _feet[ i ];
+			_stancePlanted[ i ] = _positions[ foot.Ball ].Z - foot.BallHeight <= clearance
+				&& _positions[ foot.Ankle ].Z - foot.AnkleHeight <= heelRise;
+			// The hold works in metres; the model is in inches.
+			_stanceFree[ i ] = SkateUnits.Metres( model.PointToWorld( SkateUnits.ToEngine( _positions[ foot.Ball ] ) ) );
+			_stanceShown[ i ] = _stanceFree[ i ];
+		}
+		_stance.Update( _stanceShown, _stancePlanted, delta );
+		for ( var i = 0; i < 2; i++ )
+		{
+			var foot = _feet[ i ];
+			var moved = SkateUnits.ToCore( model.Rotation.Inverse * SkateUnits.Inches( _stanceShown[ i ] - _stanceFree[ i ] ) );
+			// Kept out of the ground under it, as the clips' feet are (see LiftOnFoot): the stock run's feet dip up to 0.6 in
+			// into it.
+			var sole = MathF.Min( _positions[ foot.Ankle ].Z - foot.AnkleHeight, _positions[ foot.Ball ].Z - foot.BallHeight ) + moved.Z;
+			moved.Z += Math.Clamp( -sole, 0f, MaximumLift );
+			if ( moved.LengthSquared() < 1e-6f )
+				continue;
+			foot.Leg.Solve( _positions, _rotations, _positions[ foot.Ankle ] + moved, _kneeHint[ i ] );
 		}
 	}
 

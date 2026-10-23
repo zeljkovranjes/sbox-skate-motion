@@ -487,6 +487,23 @@ internal sealed class RiderAnimator
 	private readonly CitizenAnimationHelper _legs;
 	private bool _legsGrounded = true;
 
+	// The stock walk picks walking or running by speed itself, and walks on well past its walk's own stride: carrying the
+	// board at a run (170 in/s) it walked with a stride covering about 104 in/s, and each planted foot slid forward 66 in/s
+	// (12-15 in a step; 2-7 running). Faster than RunFrom (in/s, past the quickest walk, 105) it is made to run, and it is
+	// left to choose again below WalkBelow; it changes over only while the body is not on one held foot (between a run's
+	// strides, or with both feet down; see ClipRiderAnimation.FeetHeld): changed under a lone planted foot, the walk's
+	// hand-over to the run swept that foot 16 in across the ground in a fifth of a second.
+	private const float RunFrom = 120f;
+	private const float WalkBelow = 110f;
+	private bool _legsRunning;
+
+	// How far the body has turned (degrees, the stock walk's sense) since the stock walk was last told, and when that was:
+	// told as the engine's own player controller tells it, it steps round a turn on the spot rather than the planted feet
+	// twisting round with the body.
+	private const float TurnTellEvery = 0.1f;
+	private float _legsTurned;
+	private float _legsTurnedFor;
+
 	private void FeedLegs( RiderActivity activity, Vector3 velocity )
 	{
 		if ( _clips?.LegSource is null )
@@ -495,10 +512,22 @@ internal sealed class RiderAnimator
 		_legsObject.Enabled = onFoot || _clips.LegsShown;
 		if ( !_legsObject.Enabled )
 			return;
+		_legsTurned = Math.Clamp( _legsTurned + MathX.DeltaDegrees( _renderer.WorldRotation.Yaw(), _legsObject.WorldRotation.Yaw() ),
+			-90f, 90f );
+		_legsTurnedFor += Time.Delta;
+		if ( _legsTurnedFor >= TurnTellEvery )
+		{
+			_legs.MoveRotationSpeed = onFoot ? _legsTurned * 5f : 0f;
+			_legsTurned = 0f;
+			_legsTurnedFor = 0f;
+		}
 		_legsObject.WorldTransform = _renderer.WorldTransform;
 		if ( _legsRenderer.SceneModel is { } scene )
 			scene.RenderingEnabled = false;
 		var moving = onFoot ? velocity : Vector3.Zero;
+		if ( _clips.FeetHeld != 1 )
+			_legsRunning = moving.WithZ( 0f ).Length > (_legsRunning ? WalkBelow : RunFrom);
+		_legs.MoveStyle = _legsRunning ? CitizenAnimationHelper.MoveStyles.Run : CitizenAnimationHelper.MoveStyles.Auto;
 		_legs.WithVelocity( moving );
 		_legs.WithWishVelocity( moving.WithZ( 0f ) );
 		_legs.IsGrounded = !onFoot || _onGround;
