@@ -32,6 +32,7 @@ internal sealed class RiderAnimationDirector
 	private float _impactBlend;
 	private float _impactRate;
 	private bool _impactShown;
+	private float _compression;
 
 	// Stiffness (per second) of the spring the impact blend follows a landing's impact on the ground and the board adjust's
 	// in the air with: critically damped, so it is nine tenths of the way there in under 0.3 s and never overshoots.
@@ -185,6 +186,14 @@ internal sealed class RiderAnimationDirector
 		parameters.Set( "blend-pop-height", input.HippyCrouch || input.OffBoard ? Math.Clamp( input.HippyCharge, 0f, 1f )
 			: input.HighPop ? 1f : 0f );
 		parameters.Set( "blend-windup", Math.Clamp( input.Windup, 0f, 1f ) );
+		// The wind-up's crouch is as deep as the trick stick is pulled (its magnitude, as the original's compression is): its
+		// clips blend from a high crouch (0) to the full one (1). Never set, every wind-up played the high crouch, whose cycle
+		// stands both feet 6-7 cm further back along the board than the clip into it and the pop out of it: the feet slid back
+		// as the crouch settled and forward again at the pop. At a full pull the three meet within a centimetre. As the
+		// original's, the depth stays as it was once the stick is let go, for the crouch's way out.
+		if ( input.Windup > 0f )
+			_compression = Math.Clamp( MathF.Sqrt( input.Windup * input.Windup + input.WindupSpin * input.WindupSpin ), 0f, 1f );
+		parameters.Set( "blend-compression", _compression );
 		// In the air this weight is the board adjust's magnitude: how far the trick stick is held over, which blends in a
 		// board adjust and tweaks the nose and tail grabs. On the ground it is the last landing's impact, which eases in: taken
 		// in a frame it gave the riding pose's knees and arms at once (a board thrown off its wheels at a bank's foot and

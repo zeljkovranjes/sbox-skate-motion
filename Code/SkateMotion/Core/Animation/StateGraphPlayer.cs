@@ -144,14 +144,15 @@ internal sealed class StateGraphPlayer
 	// it started: the offset between them, eased out the shorter way, spun the board back across the whole spin (173
 	// degrees at up to 900 degrees a second after a pop shove-it, landing with it still 30-60 degrees round, and a varial
 	// kickflip's tipped 40 degrees over as it went). A board is the same end for end, so one the new clip has within
-	// OtherEnd of its other end is taken as turned on to that end, and only what is left of the spin eases out.
+	// OtherEnd of its other end is taken as turned on to that end, and only what is left of the spin eases out. A board
+	// still playing its last clip out is judged by where that clip leaves it (see PlayedOut).
 	private void CaptureOffsets( float speed, AnimationParameters parameters )
 	{
 		var widest = 0f;
 		_caughtOtherEnd = false;
 		for ( var bone = 0; bone < _offsetRotations.Length; bone++ )
 		{
-			if ( bone == Board && Between( _from.Rotations[ bone ] * HalfTurn, _scratch.Rotations[ bone ] ) < OtherEnd )
+			if ( bone == Board && Between( PlayedOut( _from.Rotations[ bone ], parameters ) * HalfTurn, _scratch.Rotations[ bone ] ) < OtherEnd )
 			{
 				_from.Rotations[ bone ] = Quaternion.Normalize( _from.Rotations[ bone ] * HalfTurn );
 				_caughtOtherEnd = true;
@@ -221,6 +222,21 @@ internal sealed class StateGraphPlayer
 		_outgoingTime = time;
 		if ( time >= _outgoingEnd )
 			_outgoing = null;
+	}
+
+	// Where a board shown at the change will be once its last clip is played out to its end (see PlayOutBoard), so the end
+	// it is taken on to is the one it is caught on. A varial's clip is left with its flip still 60-90 degrees short of the
+	// catch, as far from the new clip's board end for end as OtherEnd and more: judged as shown at the change, the board was
+	// taken on to its other end only when the clip was left late enough, and otherwise (left a frame earlier, one varial
+	// heelflip in five) spun back across the whole half turn and touched down 70 degrees across the rider.
+	private Quaternion PlayedOut( Quaternion board, AnimationParameters parameters )
+	{
+		if ( _outgoing is null )
+			return board;
+		_outgoingNext.Sample( _outgoing, _clips.Skeleton, _outgoingEnd, true, parameters );
+		var rest = Quaternion.Normalize( Quaternion.Normalize( _outgoingNext.Rotations[ Board ] )
+			* Quaternion.Conjugate( Quaternion.Normalize( _outgoingPose.Rotations[ Board ] ) ) );
+		return Quaternion.Normalize( rest * board );
 	}
 
 	// The offsets keep the pose through a change, and the speed too. Kept to the pose alone, the new clip's own motion
