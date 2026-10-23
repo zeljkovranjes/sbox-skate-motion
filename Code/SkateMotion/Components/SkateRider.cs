@@ -611,6 +611,36 @@ public sealed class SkateRider : Component
 	// The owner's mode, shared so every other player's copy walks, carries or rides as it does.
 	[Sync] private SkateRiderMode NetMode { get; set; }
 
+	// The owner's footing and hippy jump, shared so every other player's copy stands, walks, jumps and falls as it does:
+	// the walker runs only where the rider is simulated, and a copy that read its own (switched off) showed the rider
+	// always in the air.
+	[Sync] private bool NetGrounded { get; set; }
+	[Sync] private bool NetAirborne { get; set; }
+	[Sync] private float NetRise { get; set; }
+	[Sync] private float NetMoveAmount { get; set; }
+	[Sync] private int NetHippy { get; set; }
+	[Sync] private Vector3 NetHippyOffset { get; set; }
+	[Sync] private float NetHippySpeed { get; set; }
+	[Sync] private float NetHippyCharge { get; set; }
+
+	private bool FootGrounded => IsProxy ? NetGrounded : _motor.Grounded;
+	private bool FootAirborne => IsProxy ? NetAirborne : _motor.Airborne;
+	private float FootRise => IsProxy ? NetRise : _motor.Velocity.z / SkateUnits.InchesPerMetre;
+
+	private void ShareFooting( float moveAmount )
+	{
+		NetMode = Mode;
+		NetGrounded = _motor.Grounded;
+		NetAirborne = _motor.Airborne;
+		NetRise = _motor.Velocity.z / SkateUnits.InchesPerMetre;
+		NetMoveAmount = moveAmount;
+		NetHippy = (_hippyJump.Crouching ? 1 : 0) | (_hippyJump.Flying ? 2 : 0);
+		var offset = _hippyJump.Offset;
+		NetHippyOffset = new Vector3( offset.X, offset.Y, offset.Z );
+		NetHippySpeed = _hippyJump.VerticalSpeed;
+		NetHippyCharge = _hippyJump.Charge;
+	}
+
 	// Another player's rider is not simulated here: its walk is shown from how fast its synced place moves (smoothed
 	// over about a tenth of a second).
 	private Vector3 _proxyVelocity;
@@ -621,6 +651,8 @@ public sealed class SkateRider : Component
 	{
 		if ( !_shownBail && NetMode != SkateRiderMode.Bailed && Mode != NetMode )
 			_motor.ShowMode( NetMode );
+		_hippyJump.Show( (NetHippy & 1) != 0, (NetHippy & 2) != 0,
+			new System.Numerics.Vector3( NetHippyOffset.x, NetHippyOffset.y, NetHippyOffset.z ), NetHippySpeed, NetHippyCharge );
 		if ( Time.Delta > 0f )
 		{
 			var moved = (WorldPosition - _proxyLast) / Time.Delta;
@@ -710,15 +742,16 @@ public sealed class SkateRider : Component
 	{
 		if ( _motor is null || !Board.IsValid() ) return;
 		if ( IsProxy && ShowSharedBail() ) return;
+		var moveAmount = IsProxy ? NetMoveAmount : ShownMoveAmount();
 		if ( IsProxy ) ShowSharedMode();
-		else NetMode = Mode;
+		else ShareFooting( moveAmount );
 		if ( Board.State.IsBailed && Mode == SkateRiderMode.Riding ) OnBoardBailed();
 		if ( Mode == SkateRiderMode.Bailed && _animator.Ragdoll is { } ragdoll ) _motor.FollowRagdoll( ragdoll.Position );
 		PutBoardDown();
 		_motor.FollowBoard();
 		// On foot the animation is told whether the rider stands or is in the air (a jump, a fall, a step off up high).
 		if ( Mode is SkateRiderMode.Walking or SkateRiderMode.Carrying )
-			_animator.SetFooting( !_motor.Airborne, _motor.Velocity.z / SkateUnits.InchesPerMetre );
+			_animator.SetFooting( !FootAirborne, FootRise );
 		Knock();
 		_animator.PlantLip = Board.HandPlantLip;
 		// Dropping in, the board the clips set down at the lip lies where they have it against where the rider stands there.
@@ -726,12 +759,12 @@ public sealed class SkateRider : Component
 		if ( PoseThisFrame( out var poseDelta )
 			&& !_animator.UpdateClips( Activity(), Board.State, Board.CurrentInput, ShownVelocity, Goofy, AnimationStyle, poseDelta,
 			// Backing out of a drop-in is the stick pulled back from the lip, as the graph's step back reads it.
-			moveAmount: _interaction.BacksOut ? -1f : ShownMoveAmount(), holdingBoard: Mode == SkateRiderMode.Carrying,
+			moveAmount: _interaction.BacksOut ? -1f : moveAmount, holdingBoard: Mode == SkateRiderMode.Carrying,
 			hippy: _hippyJump,
 			runout: _runout && IsInteracting, groundSlope: _motor.GroundSlope, edgeDistance: _motor.EdgeDistance,
 			mountHeld: _mountHeld, droppingIn: Mode == SkateRiderMode.Riding && Time.Now - _droppedIn < DroppingIn ) )
 		{
-			_animator.Update( Mode, Board.State, ShownVelocity, _motor.Grounded, Goofy );
+			_animator.Update( Mode, Board.State, ShownVelocity, FootGrounded, Goofy );
 			if ( IsInteracting ) _animator.UpdateInteraction( _interaction, Goofy );
 		}
 		// Down on the ground dark side up the board cannot be ridden on its grip: as the graph's dark ground state has it, the
@@ -893,7 +926,14 @@ public sealed class SkateRider : Component
 
 	protected override void OnFixedUpdate()
 	{
-		if ( IsProxy || _motor is null || !Board.IsValid() ) return;
+		// Another player's bail is shown by a ragdoll made here: its bodies get their gravity each step, as the owner's do
+		// (left to themselves they floated).
+		if ( IsProxy )
+		{
+			if ( _shownBail ) _animator?.Ragdoll?.Step( Time.Delta );
+			return;
+		}
+		if ( _motor is null || !Board.IsValid() ) return;
 		_animator.Ragdoll?.Step( Time.Delta );
 		Configure();
 		AutoRecover();

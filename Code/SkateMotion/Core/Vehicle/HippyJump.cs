@@ -117,4 +117,17 @@ internal sealed class HippyJump
 		Reset();
 		_held = false;
 	}
+
+	/// <summary>
+	/// Shows the jump as the rider's own simulation has it, shared by the rider's owner: crouching for it, off the board,
+	/// where and how fast, and how far it was wound up; it is not stepped here.
+	/// </summary>
+	internal void Show( bool crouching, bool flying, Vector3 offset, float verticalSpeed, float charge )
+	{
+		_held = crouching;
+		Flying = flying;
+		Offset = offset;
+		VerticalSpeed = verticalSpeed;
+		Charge = charge;
+	}
 }

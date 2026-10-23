@@ -16,6 +16,13 @@
   <ItemGroup>
     <Compile Include="..\Code\SkateMotion\Assembly.cs" />
     <Compile Include="..\Code\SkateMotion\Core\**\*.cs" />
+    <!-- The plain types Core's network sharing (Core/Networking) packs: a board's state and its rider's controls. -->
+    <Compile Include="..\Code\SkateMotion\Api\SkateState.cs" />
+    <Compile Include="..\Code\SkateMotion\Api\SkateInput.cs" />
+    <Compile Include="..\Code\SkateMotion\Api\SkateGrind.cs" />
+    <Compile Include="..\Code\SkateMotion\Api\SkateBalanceMode.cs" />
+    <Compile Include="..\Code\SkateMotion\Api\SkateAirGrab.cs" />
+    <Compile Include="..\Code\SkateMotion\Api\SkatePushFeet.cs" />
     <Compile Include="TestAccess.cs" />
   </ItemGroup>
 

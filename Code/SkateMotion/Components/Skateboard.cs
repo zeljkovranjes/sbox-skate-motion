@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Sandbox;
 using SkateMotion.Core.Grinding;
+using SkateMotion.Core.Networking;
 using SkateMotion.Engine;
 using SkateMotion.Resources;
 using SkateMotion.Systems;
@@ -138,13 +139,28 @@ public sealed class Skateboard : Component, IBoardDisplay
 	/// </summary>
 	[Sync( SyncFlags.FromHost )] public Guid DriverId { get; set; }
 
-	// The simulated state, written by whoever simulates the board.
+	// The simulated state and the controls it is given, written by whoever simulates the board: every other player shows
+	// the board, and its rider's tricks, grabs, grinds and flips, from them (NetBoard).
 	[Sync] private float NetSpeed { get; set; }
 	[Sync] private int NetWheels { get; set; }
-	[Sync] private bool NetAirborne { get; set; }
-	[Sync] private bool NetBailed { get; set; }
+	[Sync] private float NetLandingSpeed { get; set; }
+	[Sync] private float NetCrouch { get; set; }
+	[Sync] private int NetPowerSlide { get; set; }
+	[Sync] private int NetBodyFlip { get; set; }
 	[Sync] private SkateBalanceMode NetBalance { get; set; }
 	[Sync] private SkateGrind NetGrind { get; set; }
+	[Sync] private SkateGrind NetNamedGrind { get; set; }
+	[Sync] private int NetStateFlags { get; set; }
+	[Sync] private float NetSteer { get; set; }
+	[Sync] private float NetPush { get; set; }
+	[Sync] private float NetBrake { get; set; }
+	[Sync] private float NetFlickX { get; set; }
+	[Sync] private float NetFlickY { get; set; }
+	[Sync] private float NetLean { get; set; }
+	[Sync] private SkateAirGrab NetGrab { get; set; }
+	[Sync] private SkatePushFeet NetPushFeet { get; set; }
+	[Sync] private SkatePushFeet NetFeetOff { get; set; }
+	[Sync] private int NetInputFlags { get; set; }
 
 	private const float RailSearchInches = 60f;
 	private const float CollisionEventSpeed = 1f;
@@ -155,7 +171,9 @@ public sealed class Skateboard : Component, IBoardDisplay
 	private bool _forwardInput;
 	private bool _simulated;
 	internal Func<SkateInput> InputOverride { get; set; }
-	internal SkateInput CurrentInput => _input;
+	// The controls the board's owner gives it, as shared, where the board is shown rather than simulated.
+	private SkateInput _sharedInput;
+	internal SkateInput CurrentInput => IsProxy && !_forwardInput ? _sharedInput : _input;
 	internal event Action<SkateInput> Stepped;
 	private SkateBody _adapter;
 	private float _displayedAt = float.NegativeInfinity;
@@ -680,9 +698,13 @@ public sealed class Skateboard : Component, IBoardDisplay
 		{
 			LastTrickFromNose = result.TrickNose;
 			TrickStarted?.Invoke( (SkateTrick)result.Trick );
+			ShareTrick( (SkateTrick)result.Trick, result.TrickNose );
 		}
 		if ( result.Landed )
+		{
 			Landed?.Invoke( result.ImpactSpeed );
+			ShareLanding( result.ImpactSpeed );
+		}
 		if ( State.IsBailed && !wasBailed )
 		{
 			ShareRelease();
@@ -722,10 +744,42 @@ public sealed class Skateboard : Component, IBoardDisplay
 	{
 		NetSpeed = State.Speed;
 		NetWheels = State.GroundedWheels;
-		NetAirborne = State.IsAirborne;
-		NetBailed = State.IsBailed;
+		NetLandingSpeed = State.LandingSpeed;
+		NetCrouch = State.Crouch;
+		NetPowerSlide = State.PowerSlide;
+		NetBodyFlip = State.BodyFlip;
 		NetBalance = State.Balance;
 		NetGrind = State.Grind;
+		NetNamedGrind = State.NamedGrind;
+		NetStateFlags = NetBoard.StateFlags( State );
+		NetSteer = _input.Steer;
+		NetPush = _input.Push;
+		NetBrake = _input.Brake;
+		NetFlickX = _input.FlickX;
+		NetFlickY = _input.FlickY;
+		NetLean = _input.Lean;
+		NetGrab = _input.Grab;
+		NetPushFeet = _input.PushFeet;
+		NetFeetOff = _input.FeetOff;
+		NetInputFlags = NetBoard.InputFlags( _input );
+	}
+
+	// The owner's tricks and landings, raised again on every other player's copy of the board, which does not simulate
+	// them: its rider plays them there as it does on the owner's screen.
+	[Rpc.Broadcast]
+	private void ShareTrick( SkateTrick trick, bool fromNose )
+	{
+		if ( !IsProxy )
+			return;
+		LastTrickFromNose = fromNose;
+		TrickStarted?.Invoke( trick );
+	}
+
+	[Rpc.Broadcast]
+	private void ShareLanding( float speed )
+	{
+		if ( IsProxy )
+			Landed?.Invoke( speed );
 	}
 
 	// Clients never simulate: they forward their own input and read the host's state.
@@ -735,6 +789,9 @@ public sealed class Skateboard : Component, IBoardDisplay
 			ReceiveInput( _input.Steer, _input.Push, _input.Brake, _input.FlickX, _input.FlickY, _input.Lean,
 				_input.Slide, _input.Goofy, _input.Pump, _input.Grab, _input.Gesture, _input.PushFeet, _input.NewPush, _input.HippyJump,
 				_input.Catch, _input.FeetOff, _input.HandPlant );
-		State = new( NetSpeed, NetWheels, NetAirborne, NetBailed, 0f ) { Balance = NetBalance, Grind = NetGrind };
+		State = NetBoard.State( NetSpeed, NetWheels, NetLandingSpeed, NetCrouch, NetPowerSlide, NetBodyFlip, NetBalance, NetGrind,
+			NetNamedGrind, NetStateFlags );
+		_sharedInput = NetBoard.Input( NetSteer, NetPush, NetBrake, NetFlickX, NetFlickY, NetLean, NetGrab, NetPushFeet, NetFeetOff,
+			NetInputFlags );
 	}
 }
