@@ -220,8 +220,11 @@ internal sealed class RiderAnimator
 	{
 		_rider = rider;
 		_board = board;
-		// Hidden until it is first posed: a model shown before then stands in its bind pose (the T) for a frame or more.
-		_visual = new GameObject( rider, false, "Rider Model" );
+		// Hidden until it is first posed: a model shown before then stands in its bind pose (the T) for a frame or more. Every
+		// client makes, poses and dresses its own, as it does the legs below: networked, the host's went with the rider to
+		// each player who joined while someone rode, a body without any of its clothes (each piece is a client's own), and
+		// stood undressed on the board beside the rider that player's client made.
+		_visual = new GameObject( rider, false, "Rider Model" ) { NetworkMode = NetworkMode.Never };
 		_renderer = _visual.Components.Create<SkinnedModelRenderer>();
 		_renderer.Model = model ?? Model.Load( "models/citizen/citizen.vmdl" );
 		_leftAnkle = _renderer.Model.GetBoneTransform( "ankle_L" );
@@ -955,9 +958,11 @@ internal sealed class RiderAnimator
 		if ( _visual.IsValid() ) _visual.Destroy();
 	}
 
+	// A place a foot or hand is put at, each client's own as the model is (networked, the host's went to each player joining
+	// with the rider or board, beside their own).
 	private static GameObject Target( GameObject parent, string name, Vector3 position )
 	{
-		var target = new GameObject( parent, true, name );
+		var target = new GameObject( parent, true, name ) { NetworkMode = NetworkMode.Never };
 		target.LocalPosition = position;
 		target.LocalRotation = Rotation.FromYaw( -90f );
 		return target;

@@ -44,7 +44,9 @@ internal sealed class BoardVisuals
 		_radius = radius;
 		_parts = rig.Parts;
 		_bones = rig.PartBones;
-		_root = new GameObject( board, true, "Generated Skateboard" );
+		// Every client builds and moves its own: networked, the host's went with the board to each player who joined after it
+		// was made, a second deck, trucks and wheels that never turned, steered or flipped, under the one that player built.
+		_root = new GameObject( board, true, "Generated Skateboard" ) { NetworkMode = NetworkMode.Never };
 		var skinned = _parts is not null && MovedByBones( _bones );
 		if ( skinned )
 			_skinned = AddSkinned( _root, "Deck", _parts );

@@ -108,13 +108,19 @@ internal static class RiderOutfit
 			return null;
 		return dresser.Source switch
 		{
-			Dresser.ClothingSource.OwnerConnection => dresser.Network.Owner is { } owner
-				? ClothingContainer.CreateFromConnection( owner, dresser.RemoveUnownedItems )
-				: new ClothingContainer(),
-			Dresser.ClothingSource.LocalUser => ClothingContainer.CreateFromLocalUser(),
+			Dresser.ClothingSource.OwnerConnection => OwnersOutfit( dresser ),
+			// The local user is the player only on the player's own client. Elsewhere their body wears what their client
+			// dressed it in, their own avatar, which is their connection's: dressed from the local user there, every other
+			// player's rider took on the skin, eyes and shape of whoever was watching.
+			Dresser.ClothingSource.LocalUser => dresser.IsProxy ? OwnersOutfit( dresser ) : ClothingContainer.CreateFromLocalUser(),
 			_ => ManualOutfit( dresser )
 		};
 	}
+
+	// The avatar of the player whose body the dresser dresses (its object's owner), or nothing with no owner.
+	private static ClothingContainer OwnersOutfit( Dresser dresser ) => dresser.Network.Owner is { } owner
+		? ClothingContainer.CreateFromConnection( owner, dresser.RemoveUnownedItems )
+		: new ClothingContainer();
 
 	private static ClothingContainer ManualOutfit( Dresser dresser )
 	{
@@ -200,8 +206,8 @@ internal static class RiderOutfit
 		Add( clothing, "models/citizen_clothes/shirt/tshirt/tshirt.clothing" );
 		Add( clothing, "models/citizen_clothes/trousers/jeans/jeans.clothing" );
 		Add( clothing, "models/citizen_clothes/shoes/sneakers/sneakers.clothing" );
-		var dresser = renderer.Components.Create<Dresser>();
-		dresser.BodyTarget = renderer;
+		// The client's own dresser, as CopyFrom's is: not networked or saved, and dressing only as it is told.
+		var dresser = Dresser.GetOrCreate( renderer );
 		dresser.ApplyHeightScale = false;
 		dresser.Apply( clothing );
 	}
