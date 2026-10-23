@@ -677,6 +677,7 @@ public sealed class SkateRider : Component
 	private void ShareRider( float moveAmount )
 	{
 		NetMode = Mode;
+		NetBoardId = Board.Id;
 		NetGrounded = _motor.Grounded;
 		NetAirborne = _motor.Airborne;
 		NetRise = _motor.Velocity.z / SkateUnits.InchesPerMetre;
@@ -771,6 +772,26 @@ public sealed class SkateRider : Component
 
 	protected override void OnStart()
 	{
+		// Another player's rider can arrive before its board can be read here (the board's code still loading, see
+		// LateLoad): it is set up once the board is (see FindBoard), rather than failing and staying broken.
+		if ( IsProxy && !Board.IsValid() )
+			return;
+		Begin();
+	}
+
+	// The board this rider rides, shared by its owner: another player's copy finds it by it when the reference it
+	// arrived with could not be read.
+	[Sync] private System.Guid NetBoardId { get; set; }
+
+	private bool FindBoard()
+	{
+		if ( !Board.IsValid() && NetBoardId != System.Guid.Empty )
+			Board = Scene.Directory.FindComponentByGuid( NetBoardId ) as Skateboard;
+		return Board.IsValid();
+	}
+
+	private void Begin()
+	{
 		if ( !Board.IsValid() || Board.GameObject == GameObject )
 			throw new InvalidOperationException( "Place SkateRider on its own object and assign its Skateboard." );
 		var rig = Board.Components.Get<SkateboardRig>();
@@ -792,6 +813,7 @@ public sealed class SkateRider : Component
 
 	protected override void OnUpdate()
 	{
+		if ( _motor is null && IsProxy && FindBoard() ) Begin();
 		if ( _motor is null || !Board.IsValid() ) return;
 		if ( IsProxy && ShowSharedBail() ) return;
 		// Backing out of a drop-in is the stick pulled back from the lip, as the graph's step back reads it.
