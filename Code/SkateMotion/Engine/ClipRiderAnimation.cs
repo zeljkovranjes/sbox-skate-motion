@@ -173,6 +173,31 @@ internal sealed class ClipRiderAnimation
 	private readonly Vector3?[] _plantedAt;
 	private readonly float[] _plantAge;
 	private const float PlantWindow = 0.15f;
+
+	// The landing's plant (see Planted) starts PrePlant seconds before the board is seen to come down, for the feet then on
+	// the deck: after a spinning trick the clips' board still turns back round under their feet into the air clip's stance
+	// as the board comes down, and the feet it had on the deck ridden were dragged across it in the last frames of the air
+	// (3-6 in in three frames after a shove-it or a laser flip). Planted, they stay where they came down and step (see
+	// StepTime) if the stance is far off. Only once the shown board lies within PrePlantTurn degrees of the board ridden:
+	// a varial's board still half turned as it comes down turns the stance round with it at the landing, and feet planted
+	// against it were carried across the deck as it turned back (22 in), nor while it still turns against the board ridden
+	// faster than PrePlantSpin degrees a second: a varial kickflip's board rolling level through the catch passed for one
+	// lying flat, and the front foot was planted where the clip had it for that frame, 2.7 in across the deck.
+	private const float PrePlant = 0.12f;
+	private const float PrePlantTurn = 20f;
+	private const float PrePlantSpin = 400f;
+	private Rotation? _shownTurnBefore;
+
+	private bool LandingSoon( in RiderAnimationInput input, Transform shown, float delta )
+	{
+		if ( _skateboard is null )
+			return false;
+		var against = _skateboard.RenderTransform.Rotation.Inverse * shown.Rotation;
+		var spin = _shownTurnBefore is { } before && delta > 0f ? Rotation.Difference( before, against ).Angle() / delta : float.PositiveInfinity;
+		_shownTurnBefore = against;
+		return input.Airborne && string.IsNullOrEmpty( input.Grind ) && input.TimeToLand > 0f && input.TimeToLand < PrePlant
+			&& against.Angle() < PrePlantTurn && spin < PrePlantSpin;
+	}
 	private readonly System.Numerics.Quaternion?[] _plantedTurn;
 	private readonly int[][] _footTree;
 	private readonly float[] _sinceAirborne;
@@ -1024,12 +1049,14 @@ internal sealed class ClipRiderAnimation
 		_hipDrop = Approach( _hipDrop, crouch, (_hipDrop < crouch ? dropRate : crouchRise) * delta );
 		_reachShort = float.NegativeInfinity;
 		_groundShort = float.NegativeInfinity;
+		var landingSoon = LandingSoon( input, boardShown, delta );
 		for ( var i = 0; i < _feet.Length; i++ )
 		{
 			if ( riding )
 			{
 				_locks[ i ].Reset();
-				OnBoard( i, model, mirror, released, delta, boardShown, !string.IsNullOrEmpty( input.Grind ), input.Airborne );
+				OnBoard( i, model, mirror, released, delta, boardShown, !string.IsNullOrEmpty( input.Grind ), input.Airborne,
+					landingSoon );
 				continue;
 			}
 			// Off the board a foot the deck held lets go of it over FootBlend, not in a frame: on a board longer or wider
@@ -2303,7 +2330,7 @@ internal sealed class ClipRiderAnimation
 
 
 	private void OnBoard( int index, Transform model, bool mirror, bool released, float delta, Transform board, bool onRail,
-		bool airborne )
+		bool airborne, bool landingSoon = false )
 	{
 		var foot = _feet[ index ];
 		var toeSource = _retargeter.SourceEffector( foot.Ball, mirror );
@@ -2432,7 +2459,7 @@ internal sealed class ClipRiderAnimation
 			_footWeight[ index ] = weight = 1f;
 		}
 		var target = ankle + _footCorrection[ index ] * weight;
-		target = Planted( index, target, model, board, airborne, onRail || released, onItsBoard, delta );
+		target = Planted( index, target, model, board, airborne && !landingSoon, onRail || released, onItsBoard, delta );
 		_footCarry[ index ] = (board, model.PointToWorld( SkateUnits.ToEngine( ankle + _footCorrection[ index ] ) ), ankle, Time.Now);
 		target = Entering( index, target, model, board, delta );
 		// On a rail and in the air the leg's reach is limited; the limit comes and goes over SwitchEase.
