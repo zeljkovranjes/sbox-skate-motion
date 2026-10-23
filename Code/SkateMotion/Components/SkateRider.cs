@@ -537,6 +537,64 @@ public sealed class SkateRider : Component
 	// Inches above the deck where the body line starts (clear of the deck and trucks).
 	private const float HeadClearStart = 6f;
 
+	// A trick's danger zone (see RiderAnimator.DangerZone) is a wipeout to come down in, as the original's are: the board
+	// touching down (or onto a rail) while the trick has not reached its catch, a superman still stretched out, or the body
+	// hitting the world on the way down (a line from the hips to either foot). Touching down in a superman the rider landed
+	// with its legs 47 in down through the ground; touching down in a flip, the board snapped out of its half turn under the
+	// feet. As the original's, a danger zone counts only after IgnoreDanger seconds in the air (10 of its frames), and the
+	// one held as the board touches down is the last frame's in the air, before the landing's clips take over.
+	private const float IgnoreDanger = 10f / 60f;
+	private float _flyingFor;
+	private bool _inDanger;
+
+	private void CheckDangerZone()
+	{
+		if ( IsProxy || Mode != SkateRiderMode.Riding || Board.State.IsBailed || _hippyJump.Flying )
+		{
+			_flyingFor = 0f;
+			_inDanger = false;
+			return;
+		}
+		var flying = Board.State.IsAirborne && Board.State.Grind == SkateGrind.None;
+		if ( !flying )
+		{
+			var touchedDown = _inDanger;
+			_flyingFor = 0f;
+			_inDanger = false;
+			if ( touchedDown )
+				Board.Bail();
+			return;
+		}
+		_flyingFor += Time.Delta;
+		_inDanger = _flyingFor > IgnoreDanger && _animator.DangerZone;
+		if ( _inDanger && BodyHitsWorld() )
+			Board.Bail();
+	}
+
+	// Whether either leg as drawn (hips to knee to foot) passes through the world, or will within HitLead inches below it:
+	// told only once a knee was already through, the ragdoll started 2-8 in inside the ground.
+	private const float HitLead = 3f;
+
+	private bool BodyHitsWorld()
+	{
+		if ( _animator.HipsPosition is not { } hips )
+			return false;
+		for ( var side = 0; side < 2; side++ )
+		{
+			if ( _animator.KneePosition( side == 0 ) is not { } knee || _animator.FootPosition( side == 0 ) is not { } foot )
+				continue;
+			if ( Blocked( hips, knee + Vector3.Down * HitLead ) || Blocked( knee, foot + Vector3.Down * HitLead ) )
+				return true;
+		}
+		return false;
+	}
+
+	private bool Blocked( Vector3 from, Vector3 to )
+	{
+		var hit = Scene.Trace.Ray( from, to ).IgnoreGameObjectHierarchy( GameObject ).IgnoreGameObjectHierarchy( Board.GameObject ).Run();
+		return hit.Hit && !hit.StartedSolid;
+	}
+
 	// A bailed rider gets up after lying still for SettledFor seconds once AutoRecoverAfter have passed, and in any
 	// case after RecoverAtLatest seconds.
 	private const float AutoRecoverAfter = 3.5f;
@@ -850,6 +908,7 @@ public sealed class SkateRider : Component
 		else _held.Reset();
 		if ( IsInteracting && !IsProxy ) _interaction.ShowPickup();
 		CheckHeadFirst();
+		CheckDangerZone();
 		Board.PushContact = Mode == SkateRiderMode.Riding ? _animator.PushContact : null;
 		Board.DarkSideUp = Mode == SkateRiderMode.Riding && _animator.DarkSideUp;
 		Board.FootPlanting = Mode == SkateRiderMode.Riding && PlantingFoot( AnimationState );

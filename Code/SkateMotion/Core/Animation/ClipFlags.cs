@@ -50,6 +50,15 @@ internal static class ClipFlags
 			return null;
 		if ( !IsTimed( flag ) )
 			return Names( clip, parameters, Normalize( flag ) ) ? true : null;
+		return Window( clip, parameters, time, flag );
+	}
+
+	/// <summary>Whether the playing clip's own window for <paramref name="flag"/> holds the moment <paramref name="time"/>
+	/// seconds in, whatever the flag: false where the clip has no such window, null without a clip or attributes.</summary>
+	internal static bool? Window( AnimationClip clip, AnimationParameters parameters, float time, string flag )
+	{
+		if ( clip is null )
+			return null;
 		var length = clip.Length( parameters );
 		var phase = length > 0f && float.IsFinite( length ) ? time / length : 0f;
 		if ( phase > 1f )

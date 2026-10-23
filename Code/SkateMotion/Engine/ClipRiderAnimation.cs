@@ -501,6 +501,10 @@ internal sealed class ClipRiderAnimation
 	// Graph action of the states that step off the board from a grab in the air.
 	private const string AirDismounting = "air-dismounting";
 
+	// The graph's mark of a danger zone (see DangerZone), and the clips' own.
+	private const string DangerZoneAction = "attribute:danger-zone";
+	private const string DangerZoneWindow = "DANGERZONE";
+
 	/// <summary>True while the graph holds the board dark side up (a dark catch, dark air or ground, a darkslide).</summary>
 	internal bool Dark { get; private set; }
 
@@ -718,6 +722,22 @@ internal sealed class ClipRiderAnimation
 
 	/// <summary>True while a foot stands on the ground beside the board (held where it touched down).</summary>
 	internal bool FootOnGround => System.Array.IndexOf( _locked, true ) >= 0;
+
+	/// <summary>
+	/// Whether the rider is in a danger zone: a part of a trick the board must not come down in (a flip before its catch,
+	/// a superman, a foot off the board in a grab), marked by the graph's state or the playing clip's own window, as the
+	/// original marks it. Touching down in one is a wipeout there; landed instead, the board was shown snapping out of a
+	/// half-turned flip, and a superman's legs went down through the ground.
+	/// </summary>
+	internal bool DangerZone
+	{
+		get
+		{
+			if ( (_treeStates?.Player.Graph ?? _states?.Graph)?.HasAction( DangerZoneAction ) == true )
+				return true;
+			return _states is not null && ClipFlags.Window( _states.Clip, _parameters, _states.Time, DangerZoneWindow ) == true;
+		}
+	}
 
 	/// <summary>Authored board pose aligned to the carrying hand after retargeting, when configured.</summary>
 	internal Transform? CarriedBoardPose { get; private set; }

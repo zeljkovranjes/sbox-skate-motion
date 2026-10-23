@@ -862,6 +862,15 @@ internal sealed class RiderAnimator
 	/// <summary>Where the rider's head is shown this frame, or null when the model has no head bone.</summary>
 	internal Vector3? HeadPosition => Bone( "head", out var head ) ? head.Position : null;
 
+	/// <summary>Where the hips, each knee and each foot are drawn, for the body hitting the world (null where the rig has
+	/// none).</summary>
+	internal Vector3? HipsPosition => Bone( "hips", out var hips ) ? hips.Position : null;
+	internal Vector3? KneePosition( bool left ) => Bone( left ? "left_leg" : "right_leg", out var knee ) ? knee.Position : null;
+	internal Vector3? FootPosition( bool left ) => Bone( left ? "left_foot" : "right_foot", out var foot ) ? foot.Position : null;
+
+	/// <summary>Whether the rider is in a trick's danger zone (see ClipRiderAnimation.DangerZone).</summary>
+	internal bool DangerZone => _clips?.DangerZone ?? false;
+
 	// World transform of a humanoid role on whatever model the rider uses.
 	private bool Bone( string role, out Transform transform )
 	{
