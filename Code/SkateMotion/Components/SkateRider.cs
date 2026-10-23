@@ -135,6 +135,37 @@ public sealed class SkateRider : Component
 	{
 		ArgumentNullException.ThrowIfNull( tags );
 		_animator?.Request( tags, seconds );
+		// Played by the rider's owner (a gesture), it plays on every other player's copy too.
+		if ( !IsProxy && Networking.IsActive )
+			SharePlayAnimation( PackTags( tags ), seconds );
+	}
+
+	[Rpc.Broadcast]
+	private void SharePlayAnimation( string tags, float seconds )
+	{
+		if ( IsProxy )
+			_animator?.Request( UnpackTags( tags ), seconds );
+	}
+
+	// A motion's tags as one line (key=value;key=value), as they go over the network.
+	private static string PackTags( IReadOnlyDictionary<string, string> tags )
+	{
+		var text = new System.Text.StringBuilder();
+		foreach ( var (key, value) in tags )
+			text.Append( key ).Append( '=' ).Append( value ).Append( ';' );
+		return text.ToString();
+	}
+
+	private static Dictionary<string, string> UnpackTags( string text )
+	{
+		var tags = new Dictionary<string, string>();
+		foreach ( var pair in text.Split( ';', StringSplitOptions.RemoveEmptyEntries ) )
+		{
+			var at = pair.IndexOf( '=' );
+			if ( at > 0 )
+				tags[ pair[ ..at ] ] = pair[ (at + 1).. ];
+		}
+		return tags;
 	}
 
 	/// <summary>Actions the loaded clip graph offers for a family (optionally one style), e.g. every gesture.</summary>
@@ -627,7 +658,23 @@ public sealed class SkateRider : Component
 	private bool FootAirborne => IsProxy ? NetAirborne : _motor.Airborne;
 	private float FootRise => IsProxy ? NetRise : _motor.Velocity.z / SkateUnits.InchesPerMetre;
 
-	private void ShareFooting( float moveAmount )
+	// The owner's interaction (getting on or off, picking the board up, dropping or throwing it, a drop-in) and how it
+	// goes, shared so every other player's copy plays it: the interaction moves the rider and the board, which only the
+	// owner does, so the other copies only show it. Until then they showed the board moving on its own, and a board
+	// thrown or dropped stayed in the hand there until the rider walked on.
+	[Sync] private int NetAction { get; set; }
+	[Sync] private bool NetRunout { get; set; }
+	[Sync] private bool NetMountHeld { get; set; }
+	[Sync] private bool NetDroppingIn { get; set; }
+	[Sync] private bool NetCarryFollow { get; set; } = true;
+
+	private RiderAction ShownAction => IsProxy ? (RiderAction)NetAction : IsInteracting ? _interaction.Action : RiderAction.None;
+	private bool ShownRunout => IsProxy ? NetRunout : _runout && IsInteracting;
+	private bool ShownMountHeld => IsProxy ? NetMountHeld : _mountHeld;
+	private bool ShownDroppingIn => IsProxy ? NetDroppingIn : Mode == SkateRiderMode.Riding && Time.Now - _droppedIn < DroppingIn;
+	private bool CarryFollows => IsProxy ? NetCarryFollow : !IsInteracting || _interaction.CarriesBoard;
+
+	private void ShareRider( float moveAmount )
 	{
 		NetMode = Mode;
 		NetGrounded = _motor.Grounded;
@@ -639,6 +686,11 @@ public sealed class SkateRider : Component
 		NetHippyOffset = new Vector3( offset.X, offset.Y, offset.Z );
 		NetHippySpeed = _hippyJump.VerticalSpeed;
 		NetHippyCharge = _hippyJump.Charge;
+		NetAction = (int)ShownAction;
+		NetRunout = ShownRunout;
+		NetMountHeld = ShownMountHeld;
+		NetDroppingIn = ShownDroppingIn;
+		NetCarryFollow = CarryFollows;
 	}
 
 	// Another player's rider is not simulated here: its walk is shown from how fast its synced place moves (smoothed
@@ -742,9 +794,10 @@ public sealed class SkateRider : Component
 	{
 		if ( _motor is null || !Board.IsValid() ) return;
 		if ( IsProxy && ShowSharedBail() ) return;
-		var moveAmount = IsProxy ? NetMoveAmount : ShownMoveAmount();
+		// Backing out of a drop-in is the stick pulled back from the lip, as the graph's step back reads it.
+		var moveAmount = IsProxy ? NetMoveAmount : _interaction.BacksOut ? -1f : ShownMoveAmount();
 		if ( IsProxy ) ShowSharedMode();
-		else ShareFooting( moveAmount );
+		else ShareRider( moveAmount );
 		if ( Board.State.IsBailed && Mode == SkateRiderMode.Riding ) OnBoardBailed();
 		if ( Mode == SkateRiderMode.Bailed && _animator.Ragdoll is { } ragdoll ) _motor.FollowRagdoll( ragdoll.Position );
 		PutBoardDown();
@@ -758,11 +811,10 @@ public sealed class SkateRider : Component
 		_animator.BoardRestFrame = IsInteracting ? _interaction.DropInStand : null;
 		if ( PoseThisFrame( out var poseDelta )
 			&& !_animator.UpdateClips( Activity(), Board.State, Board.CurrentInput, ShownVelocity, Goofy, AnimationStyle, poseDelta,
-			// Backing out of a drop-in is the stick pulled back from the lip, as the graph's step back reads it.
-			moveAmount: _interaction.BacksOut ? -1f : moveAmount, holdingBoard: Mode == SkateRiderMode.Carrying,
+			moveAmount: moveAmount, holdingBoard: Mode == SkateRiderMode.Carrying,
 			hippy: _hippyJump,
-			runout: _runout && IsInteracting, groundSlope: _motor.GroundSlope, edgeDistance: _motor.EdgeDistance,
-			mountHeld: _mountHeld, droppingIn: Mode == SkateRiderMode.Riding && Time.Now - _droppedIn < DroppingIn ) )
+			runout: ShownRunout, groundSlope: _motor.GroundSlope, edgeDistance: _motor.EdgeDistance,
+			mountHeld: ShownMountHeld, droppingIn: ShownDroppingIn ) )
 		{
 			_animator.Update( Mode, Board.State, ShownVelocity, FootGrounded, Goofy );
 			if ( IsInteracting ) _animator.UpdateInteraction( _interaction, Goofy );
@@ -771,7 +823,7 @@ public sealed class SkateRider : Component
 		// rider steps off and runs it out, leaving the board upside down.
 		if ( !IsProxy && Mode == SkateRiderMode.Riding && !IsInteracting && _animator.DarkOnGround && !Board.State.IsBailed )
 			BeginDismount( true );
-		_motor.UpdateCarryPose( _animator.CarriedBoardPose, !IsInteracting || _interaction.CarriesBoard );
+		_motor.UpdateCarryPose( _animator.CarriedBoardPose, CarryFollows );
 		if ( IsInteracting ) HandleBoard();
 		else _held.Reset();
 		if ( IsInteracting && !IsProxy ) _interaction.ShowPickup();
@@ -901,9 +953,9 @@ public sealed class SkateRider : Component
 
 	private RiderActivity Activity()
 	{
-		if ( IsInteracting )
+		if ( ShownAction is not RiderAction.None and var action )
 		{
-			return _interaction.Action switch
+			return action switch
 			{
 				// Once a mount from the hand or a drop-in has put the board down and the rider on it, it rides (the board goes
 				// down as the clip has its board under the feet): shown as getting on, the body would be placed from the
