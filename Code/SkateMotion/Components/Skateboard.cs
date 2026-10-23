@@ -162,6 +162,13 @@ public sealed class Skateboard : Component, IBoardDisplay
 	[Sync] private SkatePushFeet NetFeetOff { get; set; }
 	[Sync] private int NetInputFlags { get; set; }
 
+	// Push strokes started, counted where the controls are given: a stroke's start (SkateInput.NewPush) lasts a moment,
+	// which synced values, sent a few times a second, all but always missed, and every other player saw a rider hold a
+	// push without ever starting a stroke. Each one shown starts a stroke where the count has gone up.
+	[Sync] private int NetPushStarts { get; set; }
+	private int _pushStarts;
+	private int _shownPushStarts;
+
 	private const float RailSearchInches = 60f;
 	private const float CollisionEventSpeed = 1f;
 	private readonly RailSegment[] _rails = new RailSegment[ Core.Animation.GrindEdgeQuery.Capacity ];
@@ -227,7 +234,10 @@ public sealed class Skateboard : Component, IBoardDisplay
 	/// again in the air.</summary>
 	public void SetInput( SkateInput input )
 	{
+		var before = _input;
 		_input = InputOverride is { } scripted ? scripted() : input;
+		if ( _input.NewPush && !before.NewPush )
+			_pushStarts++;
 		_forwardInput = IsProxy;
 	}
 
@@ -762,6 +772,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 		NetPushFeet = _input.PushFeet;
 		NetFeetOff = _input.FeetOff;
 		NetInputFlags = NetBoard.InputFlags( _input );
+		NetPushStarts = _pushStarts;
 	}
 
 	// The owner's tricks and landings, raised again on every other player's copy of the board, which does not simulate
@@ -791,7 +802,9 @@ public sealed class Skateboard : Component, IBoardDisplay
 				_input.Catch, _input.FeetOff, _input.HandPlant );
 		State = NetBoard.State( NetSpeed, NetWheels, NetLandingSpeed, NetCrouch, NetPowerSlide, NetBodyFlip, NetBalance, NetGrind,
 			NetNamedGrind, NetStateFlags );
+		var pushStarted = NetPushStarts != _shownPushStarts;
+		_shownPushStarts = NetPushStarts;
 		_sharedInput = NetBoard.Input( NetSteer, NetPush, NetBrake, NetFlickX, NetFlickY, NetLean, NetGrab, NetPushFeet, NetFeetOff,
-			NetInputFlags );
+			NetInputFlags ) with { NewPush = pushStarted };
 	}
 }
