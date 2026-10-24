@@ -177,6 +177,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 	private SkateInput _input;
 	private bool _forwardInput;
 	private bool _simulated;
+	private bool _heldByPhysics;
 	internal Func<SkateInput> InputOverride { get; set; }
 	// The controls the board's owner gives it, as shared, where the board is shown rather than simulated.
 	private SkateInput _sharedInput;
@@ -217,6 +218,9 @@ public sealed class Skateboard : Component, IBoardDisplay
 	/// <summary>Changes between loaded rider mass and a freely rolling unattended board.</summary>
 	public void SetRiderAttached( bool attached )
 	{
+		// A rider getting on takes the board back from whatever physics held it.
+		if ( attached )
+			HeldByPhysics = false;
 		_riderAttached = attached;
 		Wake();
 		_input = default;
@@ -226,6 +230,39 @@ public sealed class Skateboard : Component, IBoardDisplay
 		// placed again now, from the turned board, rather than its trucks and wheels turning over with it until next frame.
 		if ( _adapter is not null && Body.IsValid() && Vector3.Dot( before.Up, WorldRotation.Up ) < 0f )
 			_visuals?.Update( _adapter.Bodies, Simulating, RenderTransform, _solids, State.Grind != SkateGrind.None );
+	}
+
+	/// <summary>
+	/// While true, the board's own simulation stands aside and the engine's physics moves the board as it does any prop
+	/// (falling, its shapes solid), for whatever holds it so, such as a game's physics tool. Set false again, the board
+	/// simulates on from where it then is, going and turning as it was, so a board thrown carries on through the air and
+	/// lands on its wheels. Only the board's owner, which simulates it, holds it so; a rider getting on takes it back.
+	/// </summary>
+	public bool HeldByPhysics
+	{
+		get => _heldByPhysics;
+		set
+		{
+			if ( _heldByPhysics == value )
+				return;
+			_heldByPhysics = value;
+			_input = default;
+			if ( value )
+			{
+				_adapter?.Disable();
+				// The board's body falls by its own simulation, so it has no gravity of its own to give back.
+				if ( Body.IsValid() )
+				{
+					Body.MotionEnabled = true;
+					Body.Gravity = true;
+				}
+				return;
+			}
+			Wake();
+			_smooth.Reset();
+			if ( Enabled )
+				_adapter?.Enable();
+		}
 	}
 
 	/// <summary>Sets held controls until the next call; where the board is not simulated they are sent to its owner. While
@@ -585,9 +622,10 @@ public sealed class Skateboard : Component, IBoardDisplay
 
 	System.Collections.Generic.IReadOnlyList<RailSolid> IBoardDisplay.RailSolids => _solids;
 
-	// True while this board's own simulation moves its bodies: not while a rider carries it (the board is disabled), nor
-	// on a client, which only reads the host's state. Its trucks and wheels are then shown where physics holds them.
-	private bool Simulating => Active && !IsProxy;
+	// True while this board's own simulation moves its bodies: not while a rider carries it (the board is disabled) or
+	// something else's physics holds it (HeldByPhysics), nor on a client, which only reads the host's state. Its trucks
+	// and wheels are then shown where physics holds them.
+	private bool Simulating => Active && !IsProxy && !_heldByPhysics;
 
 	/// <summary>
 	/// The physical pose as shown this frame: interpolated between the last two physics steps, so the board and
@@ -624,6 +662,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 
 	protected override void OnEnabled()
 	{
+		_heldByPhysics = false;
 		_smooth.Reset();
 		_adapter?.Enable();
 	}
@@ -651,6 +690,12 @@ public sealed class Skateboard : Component, IBoardDisplay
 		}
 		if ( _adapter is null || !Body.IsValid() || !Body.PhysicsBody.IsValid() )
 			return;
+		// Held by other physics (see HeldByPhysics): shown where that moves it.
+		if ( _heldByPhysics )
+		{
+			_smooth.Record( WorldTransform, Time.Now, Time.Delta );
+			return;
+		}
 		// Taken over (this peer became its owner): the simulation goes on from where the board was last seen.
 		if ( !_simulated )
 		{
