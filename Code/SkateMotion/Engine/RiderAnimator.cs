@@ -845,7 +845,7 @@ internal sealed class RiderAnimator
 		_animation.IkRightHand = mode == SkateRiderMode.Carrying ? _carry : null;
 	}
 
-	internal void Bail( Vector3 velocity, Vector3 angularVelocity, Vector3 origin, float mass, float gravity )
+	internal void Bail( Vector3 velocity, Vector3 angularVelocity, Vector3 origin, float mass )
 	{
 		_visual.Enabled = true;
 		_animation.IkLeftFoot = null;
@@ -857,7 +857,7 @@ internal sealed class RiderAnimator
 		_animation.Enabled = false;
 		// The ragdoll takes up the pose the clips last showed; their bone overrides go only once it has, or it would
 		// start from the model's bind pose.
-		_ragdoll = new( _renderer, velocity, angularVelocity, origin, mass, gravity, _clips?.BoneName( "hips" ) ?? "pelvis", _board );
+		_ragdoll = new( _renderer, velocity, angularVelocity, origin, mass, _clips?.BoneName( "hips" ) ?? "pelvis", _board );
 		_clips?.Clear();
 		_ragdoll.ShowParts();
 	}

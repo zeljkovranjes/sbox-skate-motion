@@ -6,7 +6,6 @@ internal sealed class RiderRagdoll
 {
 	private readonly SkinnedModelRenderer _renderer;
 	private readonly ModelPhysics _physics;
-	private readonly float _gravity;
 	private float _elapsed;
 
 	internal GameObject Object => _renderer.GameObject;
@@ -27,11 +26,10 @@ internal sealed class RiderRagdoll
 	}
 
 	internal RiderRagdoll( SkinnedModelRenderer renderer, Vector3 velocity, Vector3 angularVelocity,
-		Vector3 origin, float mass, float gravity, string pelvis = "pelvis", GameObject board = null )
+		Vector3 origin, float mass, string pelvis = "pelvis", GameObject board = null )
 	{
 		_renderer = renderer;
 		_pelvis = pelvis;
-		_gravity = gravity * SkateUnits.InchesPerMetre;
 		var animatedFrame = renderer.SceneModel.Transform;
 		var releaseFrame = renderer.WorldTransform;
 		renderer.GameObject.SetParent( renderer.Scene, true );
@@ -41,6 +39,17 @@ internal sealed class RiderRagdoll
 		_physics.Model = renderer.Model;
 		_physics.CopyBonesFrom( renderer, true );
 		_physics.Enabled = true;
+		// Limp joints, as a body that has let go is: the model's ragdoll joints come with their motors holding each joint's
+		// turning speed at nothing (at up to 24,000 at a knee, 62,000 at a hip), which held every joint to the pose it was
+		// made in, so the body went down still crouched as it rode and lay on its back with its knees up in the air. Free of
+		// them, each joint keeps the model's own friction and the legs fall flat.
+		foreach ( var joint in _physics.Joints )
+		{
+			if ( joint.Component is BallJoint ball )
+				ball.Motor = BallJoint.MotorMode.Disabled;
+			else if ( joint.Component is HingeJoint hinge )
+				hinge.Motor = HingeJoint.MotorMode.Disabled;
+		}
 		var scale = _physics.Mass > 0f ? mass / _physics.Mass : 1f;
 		var centre = Vector3.Zero;
 		var parts = 0;
@@ -51,7 +60,11 @@ internal sealed class RiderRagdoll
 			// Animation may still contain last frame's world pose when a fixed-step collision releases us.
 			body.WorldTransform = releaseFrame.ToWorld( animatedFrame.ToLocal( body.WorldTransform ) );
 			body.MassOverride = body.Mass * scale;
-			body.Gravity = false;
+			// The engine's own gravity, as every other body in the world falls by. Pulled down by a force of ours instead,
+			// with the engine's gravity off, a part that slowed for a moment (a knee at the top of its swing) fell asleep
+			// where it was, as nothing the engine knew of pulled on it: the body lay on its back with its legs bent up in
+			// the air.
+			body.Gravity = true;
 			body.EnhancedCcd = true;
 			centre += body.WorldPosition;
 			parts++;
@@ -63,6 +76,9 @@ internal sealed class RiderRagdoll
 			shift = origin + Vector3.Up * BodyAboveDeck - centre / parts;
 		if ( !Finite( velocity ) ) velocity = Vector3.Zero;
 		if ( !Finite( angularVelocity ) ) angularVelocity = Vector3.Zero;
+		// Only the board's turn about the vertical is the rider's: a board flipping or tumbling as the rider comes off it
+		// spins about its own length, and given that spin about the deck the whole body cartwheeled.
+		angularVelocity = Vector3.Up * Vector3.Dot( angularVelocity, Vector3.Up );
 		foreach ( var part in _physics.Bodies )
 		{
 			var body = part.Component;
@@ -147,11 +163,6 @@ internal sealed class RiderRagdoll
 				still = false;
 		}
 		Settled = still ? Settled + delta : 0f;
-		foreach ( var part in _physics.Bodies )
-		{
-			var body = part.Component;
-			if ( body.IsValid() ) body.ApplyForce( Vector3.Down * (_gravity * body.Mass) );
-		}
 	}
 
 	internal void Destroy()

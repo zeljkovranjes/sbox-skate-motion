@@ -682,7 +682,7 @@ public sealed class SkateRider : Component
 		NetBailSpin = Board.ReleaseAngularVelocity;
 		NetBailOrigin = Board.ReleasePosition;
 		NetBailed = true;
-		_animator.Bail( NetBailVelocity, NetBailSpin, NetBailOrigin, BailMass, BailGravity );
+		_animator.Bail( NetBailVelocity, NetBailSpin, NetBailOrigin, BailMass );
 		_motor.Bail();
 		Board.SetRiderAttached( false );
 	}
@@ -695,7 +695,6 @@ public sealed class SkateRider : Component
 	private bool _shownBail;
 
 	private float BailMass => (Board.Profile?.Mass ?? 80f) - 3f;
-	private float BailGravity => Board.Profile?.Gravity ?? 9.81f;
 
 	// The owner's mode, shared so every other player's copy walks, carries or rides as it does.
 	[Sync] private SkateRiderMode NetMode { get; set; }
@@ -790,7 +789,7 @@ public sealed class SkateRider : Component
 	{
 		if ( NetBailed && !_shownBail )
 		{
-			_animator.Bail( NetBailVelocity, NetBailSpin, NetBailOrigin, BailMass, BailGravity );
+			_animator.Bail( NetBailVelocity, NetBailSpin, NetBailOrigin, BailMass );
 			_shownBail = true;
 		}
 		else if ( !NetBailed && _shownBail )
@@ -1066,8 +1065,8 @@ public sealed class SkateRider : Component
 
 	protected override void OnFixedUpdate()
 	{
-		// Another player's bail is shown by a ragdoll made here: its bodies get their gravity each step, as the owner's do
-		// (left to themselves they floated).
+		// Another player's bail is shown by a ragdoll made here: how long it has lain still is kept each step, as the
+		// owner's is.
 		if ( IsProxy )
 		{
 			if ( _shownBail ) _animator?.Ragdoll?.Step( Time.Delta );
