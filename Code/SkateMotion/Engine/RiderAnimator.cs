@@ -539,6 +539,9 @@ internal sealed class RiderAnimator
 		_legsGrounded = !onFoot || _onGround;
 	}
 
+	/// <summary>The rider begins on foot (see RiderStateFacts.StartOnFoot).</summary>
+	internal void StartOnFoot() => _clips?.StartOnFoot();
+
 	/// <summary>Tells the clips whether the walking rider stands on the ground and how fast it was falling.</summary>
 	internal void SetFooting( bool grounded, float fallSpeed )
 	{

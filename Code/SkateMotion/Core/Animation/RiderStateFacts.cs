@@ -136,6 +136,14 @@ internal sealed class RiderStateFacts
 	private const float JumpRise = 0.2f;
 	private const float BigFlight = 0.6f;
 
+	/// <summary>The rider begins on foot: the riding it was made in (the frame before it was set beside the board) was never
+	/// a ride, so going on foot from it is no spawn's step off.</summary>
+	internal void StartOnFoot()
+	{
+		_previousActivity = RiderActivity.Walking;
+		_spawned = float.PositiveInfinity;
+	}
+
 	internal void Fill( StateFacts facts, in RiderAnimationInput input, bool mirrored, float delta )
 	{
 		facts.Clear();

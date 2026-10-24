@@ -42,6 +42,22 @@ public class BoardHandlingFactsTests
 		Assert.False( facts.Intents.ContainsKey( "ob-spawn-dismount" ) );
 	}
 
+	[Fact]
+	public void ARiderStartedOnFootDoesNotStepOff()
+	{
+		// Made riding and set on foot beside the board a frame later, to walk over and get on: never ridden, so no step off.
+		var facts = new StateFacts();
+		var source = new RiderStateFacts();
+		source.Fill( facts, new RiderAnimationInput { Activity = RiderActivity.Riding }, false, Step );
+		source.StartOnFoot();
+		source.Fill( facts, new RiderAnimationInput { Activity = RiderActivity.Walking }, false, Step );
+		Assert.False( facts.Intents.ContainsKey( "ob-spawn-dismount" ) );
+		// Riding for real and then straight onto foot is still a spawn's step off.
+		source.Fill( facts, new RiderAnimationInput { Activity = RiderActivity.Riding }, false, Step );
+		source.Fill( facts, new RiderAnimationInput { Activity = RiderActivity.Walking }, false, Step );
+		Assert.True( facts.Intents.ContainsKey( "ob-spawn-dismount" ) );
+	}
+
 	[Theory]
 	[InlineData( 1.5f, "walk" )]
 	[InlineData( 3.5f, "run" )]

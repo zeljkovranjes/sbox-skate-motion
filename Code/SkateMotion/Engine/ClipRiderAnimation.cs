@@ -1843,6 +1843,9 @@ internal sealed class ClipRiderAnimation
 	/// <summary>On foot, how many feet are held where they were put down (see HoldStance).</summary>
 	internal int FeetHeld => _stance.Held;
 
+	/// <summary>The rider begins on foot (see RiderStateFacts.StartOnFoot).</summary>
+	internal void StartOnFoot() => _riderFacts.StartOnFoot();
+
 	private void HoldStance( in RiderAnimationInput input, Transform model, float delta )
 	{
 		var onFeet = _feet.Length == 2 && !input.Airborne && State?.Contains( ".Landing." ) != true

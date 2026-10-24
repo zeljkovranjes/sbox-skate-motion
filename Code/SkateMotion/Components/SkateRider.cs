@@ -868,6 +868,26 @@ public sealed class SkateRider : Component
 			Board.SetDriver( Network.Owner );
 	}
 
+	// A rider made to get on from beside the board (or to pick it up) is made riding and set on foot beside the board a frame
+	// later, before it is ever shown riding. Told nothing, the animation took riding one moment and on foot the next for a
+	// spawn's instant step off, and played the rider stepping off a board it was never on before it walked over and got on.
+	// Going from riding to on foot within FreshRider seconds of being made, the rider's animation starts on foot.
+	private SkateRiderMode? _lastMode;
+	private float _age;
+	private const float FreshRider = 0.5f;
+
+	private void StartOnFootIfFresh()
+	{
+		_age += Time.Delta;
+		var mode = Mode;
+		// First seen already on foot (set beside the board before this ran) counts the same: the facts take a rider they have
+		// not seen for one that was riding.
+		if ( (_lastMode is null || _lastMode == SkateRiderMode.Riding) && (mode is SkateRiderMode.Walking or SkateRiderMode.Carrying)
+			&& _age < FreshRider )
+			_animator.StartOnFoot();
+		_lastMode = mode;
+	}
+
 	protected override void OnUpdate()
 	{
 		if ( _motor is null && IsProxy && FindBoard() ) Begin();
@@ -888,6 +908,7 @@ public sealed class SkateRider : Component
 		_animator.PlantLip = Board.HandPlantLip;
 		// Dropping in, the board the clips set down at the lip lies where they have it against where the rider stands there.
 		_animator.BoardRestFrame = IsInteracting ? _interaction.DropInStand : null;
+		StartOnFootIfFresh();
 		if ( PoseThisFrame( out var poseDelta )
 			&& !_animator.UpdateClips( Activity(), Board.State, Board.CurrentInput, ShownVelocity, Goofy, AnimationStyle, poseDelta,
 			moveAmount: moveAmount, holdingBoard: Mode == SkateRiderMode.Carrying,
