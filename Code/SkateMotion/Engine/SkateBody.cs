@@ -164,6 +164,7 @@ internal sealed class SkateBody
 					incoming.Velocity, rails, Settings.Gravity, HandlingCurves.GrindNudge( Settings.Difficulty ) )
 				: null;
 			result = _pilot.Apply( _assembly, contacts, controls, delta, _map.Grind, wall, landingRail, ground );
+			_map.CarryOnSupport( _assembly );
 			_slideLanding = landingRail is { } landing
 				&& MathF.Abs( System.Numerics.Vector3.Dot( _assembly.Deck.Forward, landing ) ) < RailContacts.SlideAlong;
 			// Measured handling: a rider in the air near a rail is carried onto it. Coming down just beside one, the board

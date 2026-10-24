@@ -250,19 +250,62 @@ public sealed class Skateboard : Component, IBoardDisplay
 			if ( value )
 			{
 				_adapter?.Disable();
-				// The board's body falls by its own simulation, so it has no gravity of its own to give back.
+				// The board's body falls by its own simulation, so it has no gravity of its own to give back. It is held at
+				// its own weight, not its rider's (80 kg, as it was last given), and moved hard it must not pass through
+				// what it meets within a step.
 				if ( Body.IsValid() )
 				{
 					Body.MotionEnabled = true;
 					Body.Gravity = true;
+					Body.EnhancedCcd = true;
+					if ( _adapter is not null )
+						Body.MassOverride = _adapter.Settings.BoardMass;
 				}
+				HoldHull( true );
 				return;
 			}
+			HoldHull( false );
 			Wake();
 			_smooth.Reset();
 			if ( Enabled )
 				_adapter?.Enable();
 		}
+	}
+
+	// Held by other physics the board collides whole, from its deck's top to its wheels' undersides: its body's own collider
+	// is the deck alone (its trucks and wheels meet the world through the board's simulation), so held it lay on the floor
+	// with its wheels sunk into it, and pushed down hard the 1 in deck went through the floor altogether. A physics tool
+	// pressing a prop into the floor sinks it about 3 in, which put even the whole board's middle (1.6 in up a 3.2 in box)
+	// below the floor, where the floor pushed it on out underneath: the box reaches HoldReach further on the side facing
+	// up, so a board lying either way up rests on what it touches and its middle stays above the floor however hard it is
+	// pressed.
+	private BoxCollider _holdHull;
+	private bool _holdHullUpright;
+	private const float HoldReach = 0.12f;
+
+	private void HoldHull( bool held )
+	{
+		if ( !held )
+		{
+			if ( _holdHull.IsValid() )
+				_holdHull.Enabled = false;
+			return;
+		}
+		var size = Dimensions;
+		if ( !(size.Length > 0f) || !(size.RideHeight > 0f) )
+			return;
+		if ( !_holdHull.IsValid() )
+		{
+			_holdHull = Components.Create<BoxCollider>( false );
+			_holdHull.Flags |= ComponentFlags.NotSaved | ComponentFlags.NotNetworked;
+		}
+		_holdHullUpright = Vector3.Dot( WorldRotation.Up, Vector3.Up ) >= 0f;
+		var top = size.Thickness * 0.5f;
+		var middle = (top - size.RideHeight + (_holdHullUpright ? HoldReach : -HoldReach)) * 0.5f;
+		_holdHull.Center = new Vector3( 0f, 0f, middle ) * SkateUnits.InchesPerMetre;
+		_holdHull.Scale = new Vector3( size.Length, MathF.Max( size.Width, size.Track + 0.03f ), size.RideHeight + top + HoldReach )
+			* SkateUnits.InchesPerMetre;
+		_holdHull.Enabled = true;
 	}
 
 	/// <summary>Sets held controls until the next call; where the board is not simulated they are sent to its owner. While
@@ -415,6 +458,20 @@ public sealed class Skateboard : Component, IBoardDisplay
 	private Transform? _stillFrom;
 	private float _stillFor;
 
+	// Whether what the board lies on is moving (a prop lifted under it by a physics tool): asleep, the board stayed where it
+	// lay as the prop rose up through it.
+	private bool SupportMoving()
+	{
+		var under = Scene.Trace.Ray( WorldPosition, WorldPosition + Vector3.Down * SupportReach ).IgnoreGameObjectHierarchy( GameObject ).Run();
+		return under.Hit && under.Body.IsValid() && under.Body.MotionEnabled
+			&& under.Body.GetVelocityAtPoint( under.HitPosition ).Length > SupportSpeed;
+	}
+
+	// How far below the board's middle (inches) what it lies on is looked for, and how fast (inches a second) it must move
+	// for the board to go with it.
+	private const float SupportReach = 12f;
+	private const float SupportSpeed = 2f;
+
 	private void Wake()
 	{
 		Asleep = false;
@@ -432,7 +489,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 			return false;
 		}
 		var moved = _stillFrom is { } from && (WorldPosition.Distance( from.Position ) > SleepDrift
-			|| Rotation.Difference( WorldRotation, from.Rotation ).Angle() > SleepTurn);
+			|| Rotation.Difference( WorldRotation, from.Rotation ).Angle() > SleepTurn) || SupportMoving();
 		if ( Asleep )
 		{
 			if ( !moved )
@@ -663,6 +720,7 @@ public sealed class Skateboard : Component, IBoardDisplay
 	protected override void OnEnabled()
 	{
 		_heldByPhysics = false;
+		HoldHull( false );
 		_smooth.Reset();
 		_adapter?.Enable();
 	}
@@ -690,9 +748,11 @@ public sealed class Skateboard : Component, IBoardDisplay
 		}
 		if ( _adapter is null || !Body.IsValid() || !Body.PhysicsBody.IsValid() )
 			return;
-		// Held by other physics (see HeldByPhysics): shown where that moves it.
+		// Held by other physics (see HeldByPhysics): shown where that moves it, its box reaching up whichever side faces up.
 		if ( _heldByPhysics )
 		{
+			if ( _holdHull.IsValid() && (Vector3.Dot( WorldRotation.Up, Vector3.Up ) >= 0f) != _holdHullUpright )
+				HoldHull( true );
 			_smooth.Record( WorldTransform, Time.Now, Time.Delta );
 			return;
 		}

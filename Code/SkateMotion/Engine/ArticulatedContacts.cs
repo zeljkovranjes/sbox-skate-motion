@@ -33,6 +33,9 @@ internal sealed class ArticulatedContacts
 	private readonly NumericsVector[] _wheelNormals = new NumericsVector[ 4 ];
 	private readonly NumericsVector[] _wheelPoints = new NumericsVector[ 4 ];
 	private readonly bool[] _wheelHit = new bool[ 4 ];
+	private readonly PhysicsBody[] _wheelBodies = new PhysicsBody[ 4 ];
+	private readonly bool[] _wheelTouching = new bool[ 4 ];
+	private readonly bool[] _wheelTouchedBefore = new bool[ 4 ];
 	private readonly NumericsVector[] _previousCenters = new NumericsVector[ 4 ];
 	private bool _havePreviousCenters;
 	internal bool HasDeepPenetration { get; private set; }
@@ -72,6 +75,9 @@ internal sealed class ArticulatedContacts
 		_manifold.Reset( up );
 		_staticManifold.Reset( up );
 		Array.Clear( _wheelHit );
+		Array.Clear( _wheelBodies );
+		Array.Clear( _wheelTouching );
+		Array.Clear( _wheelTouchedBefore );
 		_havePreviousCenters = false;
 		_mesh.Clear();
 	}
@@ -86,16 +92,27 @@ internal sealed class ArticulatedContacts
 		Array.Clear( _contactShapes );
 		HasDeepPenetration = false;
 		var up = NumericsVector.Transform( NumericsVector.UnitZ, assembly.Body( 0 ).Rotation );
+		Array.Copy( _wheelTouching, _wheelTouchedBefore, 4 );
+		Array.Clear( _wheelTouching );
 		for ( var wheel = 3; wheel < 7; wheel++ )
 		{
 			ref var body = ref assembly.Body( wheel );
 			var index = wheel - 3;
 			var direction = _wheelHit[ index ] ? _wheelNormals[ index ] : up;
-			var predicted = body.Position + (body.Velocity + body.Acceleration * step) * step;
+			// A wheel's last support has moved on with what it was on: a prop lifted under the board (held by a physics
+			// tool) rose several centimetres a step. Probed from just above where it had been, each wheel's probe began
+			// inside it and was thrown out; and probed down only to where the wheel itself would be, the probe of a board
+			// rising with the prop stopped short of it, so the board lost its wheels, fell back onto the prop, was knocked
+			// up again, and at a quick lift sank in and dropped through. Both ends of the probe go by the support's motion,
+			// taken from a support the wheel touched last step.
+			var moved = NumericsVector.Zero;
+			if ( _wheelTouchedBefore[ index ] && _wheelBodies[ index ].IsValid() )
+				moved = SkateUnits.Metres( _wheelBodies[ index ].GetVelocityAtPoint( SkateUnits.Inches( _wheelPoints[ index ] ) ) ) * step;
+			var predicted = body.Position + (body.Velocity + body.Acceleration * step) * step - moved;
 			var lift = _recover ? 0.15f : 0.02f;
 			if ( _wheelHit[ index ] )
 			{
-				var gap = NumericsVector.Dot( body.Position - _wheelPoints[ index ], direction ) - _radius;
+				var gap = NumericsVector.Dot( body.Position - (_wheelPoints[ index ] + moved), direction ) - _radius;
 				lift = Math.Max( lift, Math.Clamp( -gap + 0.01f, 0f, 0.15f ) );
 			}
 			var start = body.Position + direction * lift;
@@ -119,11 +136,13 @@ internal sealed class ArticulatedContacts
 			// A lifted support probe can cross a thin mesh from its back side. Only use
 			// the face when the actual wheel approached from the side reported by its normal.
 			if ( !_recover && _havePreviousCenters && trace.Shape.IsValid() && trace.Shape.IsMeshShape
-				&& NumericsVector.Dot( _previousCenters[ index ] - SkateUnits.Metres( trace.HitPosition ), normal ) < -0.001f )
+				&& NumericsVector.Dot( _previousCenters[ index ] + moved - SkateUnits.Metres( trace.HitPosition ), normal ) < -0.001f )
 				continue;
 			_wheelNormals[ index ] = normal;
 			_wheelPoints[ index ] = SkateUnits.Metres( trace.HitPosition );
 			_wheelHit[ index ] = true;
+			_wheelTouching[ index ] = true;
+			_wheelBodies[ index ] = trace.Body;
 			Add( assembly, wheel, body.Position - normal * _radius, trace, slide );
 		}
 		foreach ( var hit in _manifold.Sample( assembly.Deck, assembly.Body( 0 ).Acceleration, step, _recover ) )
@@ -146,6 +165,36 @@ internal sealed class ArticulatedContacts
 		_havePreviousCenters = true;
 		_recover = false;
 		return _contacts.AsSpan( 0, _count );
+	}
+
+	/// <summary>
+	/// After the step's solve: what the wheels stand on, still rising into the board faster than the board (a prop lifted by
+	/// a physics tool, whose hold gives way to no weight), carries the whole board up to its speed, as a lift carries what
+	/// stands on it, and never past it. The shared solve weighs the prop as free to be pushed back down: a ridden board (80
+	/// kg) came out of it at half the speed of a prop lifted under it, was pushed back out of the prop step after step, and
+	/// at a quick lift sank in and dropped through. A board no one rides (3 kg) is already carried at the prop's speed by
+	/// the solve; carried again before it, it was thrown 30 in up off the prop.
+	/// </summary>
+	internal void CarryOnSupport( ArticulatedBoard assembly )
+	{
+		var carry = 0f;
+		var along = NumericsVector.Zero;
+		for ( var i = 0; i < 4; i++ )
+		{
+			if ( !_wheelTouching[ i ] || !_wheelBodies[ i ].IsValid() || !_wheelBodies[ i ].MotionEnabled )
+				continue;
+			var surface = SkateUnits.Metres( _wheelBodies[ i ].GetVelocityAtPoint( SkateUnits.Inches( _wheelPoints[ i ] ) ) );
+			var rise = NumericsVector.Dot( surface - assembly.Body( i + 3 ).Velocity, _wheelNormals[ i ] );
+			if ( rise > carry )
+			{
+				carry = rise;
+				along = _wheelNormals[ i ];
+			}
+		}
+		if ( !(carry > 0f) )
+			return;
+		for ( var part = 0; part < ArticulatedBoard.DynamicCount; part++ )
+			assembly.Body( part ).Velocity += along * carry;
 	}
 
 	internal void ApplyReactions( ArticulatedBoard assembly, float step )
