@@ -24,7 +24,10 @@ internal static class RiderOutfit
 		// Dressed by a dresser from an avatar, the body is dressed from that avatar the same way: its renderers carry the
 		// skin and eyes as materials overriding those tagged for them, which no copy of a renderer can read (the bare legs,
 		// a tagged skin, showed the model's own darker skin while the untagged head matched).
-		if ( OutfitOf( own ) is { } outfit )
+		// A player wearing a model of their own rather than the body their dresser dresses (a custom player model) is copied
+		// as they look, below: a dresser puts its avatar's own body on any body but the citizen, and run on the rider it
+		// put the player's old body back on the moment they got on.
+		if ( OutfitOf( own ) is { } outfit && WearsDresserBody( own, outfit ) )
 		{
 			var before = body.GameObject.Children.ToHashSet();
 			var dresser = Dresser.GetOrCreate( body );
@@ -121,6 +124,17 @@ internal static class RiderOutfit
 	private static ClothingContainer OwnersOutfit( Dresser dresser ) => dresser.Network.Owner is { } owner
 		? ClothingContainer.CreateFromConnection( owner, dresser.RemoveUnownedItems )
 		: new ClothingContainer();
+
+	// Whether the player's body is the one their dresser dresses: the citizen (which a dresser keeps), or the body its
+	// outfit's human skin puts on. Any other is a model of the player's own choosing.
+	private static bool WearsDresserBody( SkinnedModelRenderer own, ClothingContainer outfit )
+	{
+		var model = own.Model;
+		if ( model is null || model.Name.Contains( "citizen.vmdl", StringComparison.OrdinalIgnoreCase ) )
+			return true;
+		var skin = outfit.Clothing.Select( entry => entry.Clothing ).FirstOrDefault( clothing => clothing is not null && clothing.HasHumanSkin );
+		return skin is null || string.IsNullOrWhiteSpace( skin.HumanSkinModel ) || Model.Load( skin.HumanSkinModel ) == own.Model;
+	}
 
 	private static ClothingContainer ManualOutfit( Dresser dresser )
 	{
